@@ -1,0 +1,45 @@
+name: macOS baseline
+on:
+  push:
+    branches: [rewrite/rust-native]
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: baseline-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  characterize:
+    runs-on: macos-15
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: 11edd39115f3f43a83ae114b5348df6a0e1741cf
+          path: baseline
+          persist-credentials: false
+      - name: Characterize original implementations
+        run: python3 tests/legacy/run.py baseline .validation
+      - name: Archive baseline evidence
+        if: always()
+        run: |
+          mkdir -p .validation
+          git -C baseline archive HEAD | gzip > .validation/original.tar.gz
+          xcodebuild -version > .validation/xcode.txt
+          sw_vers > .validation/macos.txt
+      - name: Build original application
+        run: |
+          set -o pipefail
+          xcodebuild -project baseline/Ice.xcodeproj -scheme Ice -configuration Release -derivedDataPath "$RUNNER_TEMP/ice-baseline" CODE_SIGNING_ALLOWED=NO build 2>&1 | tee .validation/original-build.log
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: baseline-evidence
+          path: .validation/
+          include-hidden-files: true
+          retention-days: 7
+          if-no-files-found: error
