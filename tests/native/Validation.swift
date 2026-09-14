@@ -2,7 +2,7 @@ import AppKit
 import ApplicationServices
 
 @MainActor
-func validateNative(_ controller: Controller) async {
+func validateNative(_ controller: Controller, liveInput: Bool = true) async {
     var assertions = 0
     func check(_ value: @autoclosure () -> Bool, _ message: String) {
         precondition(value(), message)
@@ -97,7 +97,7 @@ func validateNative(_ controller: Controller) async {
         }
     } else { preconditionFailure("CGEventSource unavailable") }
     assertions += await validateDelivery()
-    assertions += await validateRuntime(controller)
+    assertions += await validateRuntime(controller, liveInput: liveInput)
     let panel = ItemPanel(controller: controller)
     let item = BarItem(id: 100, pid: 123, namespace: "com.apple.controlcenter", title: "WiFi", name: "Wi-Fi", frame: CGRect(x: 100, y: 0, width: 20, height: 24), onScreen: true, flags: 3, section: 2)
     panel.setItems([item])

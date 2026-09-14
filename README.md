@@ -34,6 +34,15 @@ cargo test --all-targets --locked --offline
 cargo clippy --all-targets --locked --offline -- -D warnings
 ```
 
+For native runtime coverage, quit Ice and other Litebar processes first, then use a new output path:
+
+```sh
+LITEBAR_VALIDATION=1 LITEBAR_OUTPUT=.working/Litebar-validation.app bash scripts/build-macos.sh
+uv run --python 3.13 python scripts/validate_native.py .working/Litebar-validation.app --output .working/native-results
+```
+
+The runner executes the UI suite and the full-input suite independently, with a 90-second deadline per suite. The full suite requires Accessibility access and never reports skipped movement as success. `--suite ui` is available for limited diagnostics only. The validation bundle has a separate identifier so tests do not share the production app's hosted menu-item identity. Reports and screenshots stay in the requested output directory.
+
 The source guard requires Python 3.11 or newer. It rejects the legacy application and build system, Swift source outside the native adapter and test directories, unapproved native framework imports, and third-party Cargo dependencies.
 
 GitHub Actions checks out original commit `11edd39115f3f43a83ae114b5348df6a0e1741cf` separately as `baseline/`. Its source is hash-checked before the characterization harness compiles and runs it. macOS differential tests compare the resulting 80 contract records with the Rust implementation. The baseline workflow also builds the original Release app. The baseline checkout is a test input, not a dependency of the replacement app.

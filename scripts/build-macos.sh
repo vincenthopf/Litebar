@@ -22,9 +22,9 @@ sources=(native/Platform.swift native/Settings.swift native/EventDelivery.swift 
 flags=(-swift-version 5)
 if [ "${LITEBAR_VALIDATION:-0}" = 1 ]; then
   sources+=(tests/native/Validation.swift tests/native/Runtime.swift)
-  flags+=(-g -D LITEBAR_VALIDATION)
+  flags+=(-g -D LITEBAR_VALIDATION -emit-module-path "$out/Contents/Resources/Litebar.swiftmodule")
 fi
-xcrun swiftc "${flags[@]}" -O -whole-module-optimization -target "$arch-apple-macosx14.0" \
+xcrun swiftc -emit-executable "${flags[@]}" -O -whole-module-optimization -target "$arch-apple-macosx14.0" \
   -import-objc-header native/LitebarCore.h \
   "${sources[@]}" \
   "target/$target/release/liblitebar_core.a" \
@@ -32,6 +32,9 @@ xcrun swiftc "${flags[@]}" -O -whole-module-optimization -target "$arch-apple-ma
   -framework Carbon -framework ScreenCaptureKit -framework ServiceManagement -framework Security -liconv \
   -Xlinker -dead_strip -o "$out/Contents/MacOS/Litebar"
 cp native/Info.plist "$out/Contents/Info.plist"
+if [ "${LITEBAR_VALIDATION:-0}" = 1 ]; then
+  plutil -replace CFBundleIdentifier -string com.vincenthopf.Litebar.Validation "$out/Contents/Info.plist"
+fi
 cp LICENSE "$out/Contents/Resources/LICENSE"
 if [ -f NOTICE ]; then cp NOTICE "$out/Contents/Resources/NOTICE"; fi
 plutil -lint "$out/Contents/Info.plist"
