@@ -38,4 +38,46 @@ for row in try rows("identities.tsv") {
 }
 require(MenuBarItemInfo.Namespace.null.optional == nil, "null namespace")
 require(MenuBarItemInfo.Namespace("<null>").optional != nil, "literal null namespace is not absent")
+@MainActor
+func checkTransitions() throws {
+    for row in try rows("transitions.tsv") {
+        let state = LegacyState()
+        state.menuBarManager.sections = MenuBarSection.Name.allCases.map { MenuBarSection(name: $0, state: state) }
+        let values = state.menuBarManager.sections
+        let mask = Int(row[1])!
+        values[0].controlItem.state = mask & 1 != 0 ? .showItems : .hideItems
+        values[1].controlItem.state = mask & 1 != 0 ? .showItems : .hideItems
+        values[2].controlItem.state = mask & 2 != 0 ? .showItems : .hideItems
+        let target = values[Int(row[2])!]
+        switch row[3] {
+        case "show": target.show()
+        case "hide": target.hide()
+        case "toggle": target.toggle()
+        default: preconditionFailure("Invalid action")
+        }
+        let actual = (values[1].controlItem.state == .showItems ? 1 : 0) | (values[2].controlItem.state == .showItems ? 2 : 0)
+        require(actual == Int(row[4]), row[0])
+        print("transition\t\(row[0])\t\(actual)")
+        for value in values { value.appState = nil }
+    }
+}
+try await checkTransitions()
+#if canImport(CoreGraphics)
+let buttonStates: [MenuBarItemEventButtonState] = [.leftMouseDown, .leftMouseUp, .rightMouseDown, .rightMouseUp, .otherMouseDown, .otherMouseUp]
+let source = CGEventSource(stateID: .hidSystemState)!
+let eventItem = MenuBarItem(frame: CGRect(x: 20, y: 0, width: 20, height: 24))
+for row in try rows("events.tsv") {
+    let button = buttonStates[Int(row[2])!]
+    let type: MenuBarItemEventType = row[1] == "0" ? .move(button) : .click(button)
+    let event = CGEvent.menuBarItemEvent(type: type, location: CGPoint(x: 30, y: 12), item: eventItem, pid: 456, source: source)!
+    require(event.type.rawValue == UInt32(row[3]), row[0] + " type")
+    require(event.flags.rawValue == UInt64(row[4]), row[0] + " flags")
+    require(event.getIntegerValueField(.mouseEventClickState) == Int64(row[5]), row[0] + " click")
+    require(event.getIntegerValueField(.eventTargetUnixProcessID) == 456, row[0] + " pid")
+    for field in [CGEventField.mouseEventWindowUnderMousePointer, .mouseEventWindowUnderMousePointerThatCanHandleThisEvent, .windowID] {
+        require(event.getIntegerValueField(field) == 123, row[0] + " window")
+    }
+    print("event\t\(row[0])\t\(row[3])\t\(row[4])\t\(row[5])")
+}
+#endif
 fputs("Legacy characterization: \(checks) assertions passed\n", stderr)
