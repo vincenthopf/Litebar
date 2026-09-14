@@ -124,16 +124,22 @@ func validateRuntime(_ controller: Controller, liveInput: Bool = true) async -> 
     } else {
         print("LIMITED: --self-test-ui does not validate item movement or synthetic clicks.")
     }
-    controller.openSettings()
-    weak var settings = NSApp.windows.first { $0.title == "Litebar settings" }
-    check(settings?.isVisible == true, "controller opens a native settings window")
-    settings?.close()
+    weak var settings: NSWindow?
+    autoreleasepool {
+        controller.openSettings()
+        settings = NSApp.windows.first { $0.title == "Litebar settings" }
+        check(settings?.isVisible == true, "controller opens a native settings window")
+        settings?.close()
+    }
     await waitFor { settings == nil }
     check(settings == nil, "closed settings window is released")
-    controller.openSearch()
-    weak var panel = NSApp.windows.first { $0.title == "Litebar items" }
-    check(panel?.isVisible == true, "controller opens a native item panel")
-    controller.closeItems()
+    weak var panel: NSWindow?
+    autoreleasepool {
+        controller.openSearch()
+        panel = NSApp.windows.first { $0.title == "Litebar items" }
+        check(panel?.isVisible == true, "controller opens a native item panel")
+        controller.closeItems()
+    }
     await waitFor { panel == nil }
     check(panel == nil, "closed item panel is released")
     print("Native runtime: \(assertions) assertions passed. Accessibility: \(AXIsProcessTrusted())")

@@ -126,7 +126,7 @@ final class ItemPanel: NSPanel, NSTableViewDataSource, NSTableViewDelegate, NSSe
     }
     @objc private func refreshItems() { controller?.refreshItems(force: true) }
     override func cancelOperation(_ sender: Any?) { controller?.closeItems() }
-    override func close() { endEditing(for: nil); super.close(); controller?.panelClosed() }
+    override func close() { super.close(); controller?.panelClosed() }
     func tableView(_ tableView: NSTableView, pasteboardWriterForRow row: Int) -> NSPasteboardWriting? {
         guard search.stringValue.isEmpty, rows.indices.contains(row), rows[row].flags & 1 != 0 else { return nil }
         let item = NSPasteboardItem()
