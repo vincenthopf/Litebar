@@ -22,7 +22,7 @@ sources=(native/Platform.swift native/Settings.swift native/EventDelivery.swift 
 flags=(-swift-version 5)
 if [ "${LITEBAR_VALIDATION:-0}" = 1 ]; then
   sources+=(tests/native/Validation.swift tests/native/Runtime.swift)
-  flags+=(-D LITEBAR_VALIDATION)
+  flags+=(-g -D LITEBAR_VALIDATION)
 fi
 xcrun swiftc "${flags[@]}" -O -whole-module-optimization -target "$arch-apple-macosx14.0" \
   -import-objc-header native/LitebarCore.h \

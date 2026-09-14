@@ -59,6 +59,8 @@ jobs:
           if ! "$app/Contents/MacOS/Litebar" --self-test 2>&1 | tee evidence/native-tests.txt; then
             xcrun lldb --batch -o run -o 'thread backtrace all' -- "$app/Contents/MacOS/Litebar" --self-test > evidence/debugger.txt 2>&1 || true
             cat evidence/debugger.txt
+            mkdir -p evidence/crashes
+            find "$HOME/Library/Logs/DiagnosticReports" -maxdepth 1 -name 'Litebar*' -type f -exec cp {} evidence/crashes/ \; || true
             exit 1
           fi
           app="dist/Litebar-$(uname -m).app"

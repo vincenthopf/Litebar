@@ -12,6 +12,7 @@ private final class RuntimeTarget: NSObject {
 @MainActor
 func validateRuntime(_ controller: Controller) async -> Int {
     var assertions = 0
+    var fixtures: [NSStatusItem] = []
     func check(_ value: @autoclosure () -> Bool, _ message: String) {
         let passed = value()
         fputs("\(passed ? "PASS" : "FAIL"): \(message)\n", stderr)
@@ -27,6 +28,19 @@ func validateRuntime(_ controller: Controller) async -> Int {
             try? await Task.sleep(nanoseconds: 50_000_000)
         }
     }
+    func settle() async {
+        var previous: [CGRect] = []
+        var stable = 0
+        for _ in 0..<60 {
+            let frames = fixtures.compactMap { controller.server.frame(window($0)) }
+            if frames.count == fixtures.count && frames.allSatisfy({ $0.width > 0 }) && frames == previous { stable += 1 }
+            else { stable = 0 }
+            if stable >= 3 { return }
+            previous = frames
+            try? await Task.sleep(nanoseconds: 50_000_000)
+        }
+        runtimeFailure("Native fixture layout did not settle")
+    }
     check(controller.state.revealed == 1, "validation begins with native sections shown")
     let target = RuntimeTarget()
     let right = NSStatusBar.system.statusItem(withLength: 24)
@@ -38,17 +52,20 @@ func validateRuntime(_ controller: Controller) async -> Int {
         item.button?.sendAction(on: [.leftMouseUp, .rightMouseUp])
         item.button?.setAccessibilityLabel("Litebar runtime " + title)
     }
+    fixtures = [left, right]
     defer {
         NSStatusBar.system.removeStatusItem(left)
         NSStatusBar.system.removeStatusItem(right)
     }
     await waitFor { window(left) != 0 && window(right) != 0 }
     check(window(left) != 0 && window(right) != 0, "native runtime fixture windows exist")
+    await settle()
     for status in [left, right] {
         let id = window(status)
         let entries = CGWindowListCopyWindowInfo(.optionIncludingWindow, id) as? [[String: Any]]
         let bounds = entries?.first(where: { $0[kCGWindowNumber as String] as? UInt32 == id })?[kCGWindowBounds as String] as? [String: Any]
         let expected = bounds.flatMap { CGRect(dictionaryRepresentation: $0 as CFDictionary) }
+        fputs("Window \(id): public=\(String(describing: expected)) Rust=\(String(describing: controller.server.frame(id)))\n", stderr)
         check(expected != nil && controller.server.frame(id) == expected, "frame queries and inventory use identical full-window bounds")
     }
     controller.icon?.status.button?.performClick(nil)
@@ -59,6 +76,7 @@ func validateRuntime(_ controller: Controller) async -> Int {
     check(controller.state.revealed == 1, "clicking the application icon reveals the hidden section")
     await waitFor { controller.server.frame(window(left)).map { $0.minX >= 0 } == true }
     check(controller.server.frame(window(left)).map { $0.minX >= 0 } == true, "application control restores real fixture windows")
+    await settle()
     controller.refreshItems(force: true)
     let owned = [controller.icon?.windowID, controller.hidden?.windowID, controller.always?.windowID].compactMap { $0 }
     check(!controller.displayItems.contains { owned.contains($0.id) }, "own hosted controls are excluded from the item list")
@@ -80,6 +98,9 @@ func validateRuntime(_ controller: Controller) async -> Int {
               let destination = controller.inventory.items.first(where: { $0.id == window(right) }) else {
             runtimeFailure("Native movement fixtures are absent from the WindowServer inventory")
         }
+        check(controller.server.matches(source), "live source identity matches")
+        check(controller.server.responsive(source.pid), "live source process responds")
+        fputs("Cursor property: \(String(describing: controller.server.cursorProperty()))\n", stderr)
         do {
             try await controller.actions.move(source, beside: destination, right: true, section: 1)
             check(controller.server.frame(source.id)?.minX == controller.server.frame(destination.id)?.maxX, "native event delivery actually reorders status items")
