@@ -162,5 +162,5 @@ final class Hotkeys {
 
 enum AppError: LocalizedError {
     case message(String)
-    var errorDescription: String? { if case .message(let value) = self { return value } }
+    var errorDescription: String? { switch self { case .message(let value): return value } }
 }
