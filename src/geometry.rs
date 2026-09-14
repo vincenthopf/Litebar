@@ -9,9 +9,16 @@ pub struct Rect {
 
 impl Rect {
     pub fn valid(self) -> bool {
-        [self.x, self.y, self.width, self.height, self.x + self.width, self.y + self.height]
-            .into_iter()
-            .all(f64::is_finite)
+        [
+            self.x,
+            self.y,
+            self.width,
+            self.height,
+            self.x + self.width,
+            self.y + self.height,
+        ]
+        .into_iter()
+        .all(f64::is_finite)
     }
 
     pub fn min_x(self) -> f64 {
@@ -54,8 +61,8 @@ pub fn section_mask(item: Rect, hidden: Rect, always: Option<Rect>) -> u32 {
         return 0;
     }
     let visible = item.min_x() >= hidden.max_x();
-    let concealed = item.max_x() <= hidden.min_x()
-        && always.is_none_or(|rect| item.min_x() >= rect.max_x());
+    let concealed =
+        item.max_x() <= hidden.min_x() && always.is_none_or(|rect| item.min_x() >= rect.max_x());
     let permanent = always.is_some_and(|rect| item.max_x() <= rect.min_x());
     u32::from(visible) | (u32::from(concealed) << 1) | (u32::from(permanent) << 2)
 }
@@ -78,4 +85,21 @@ pub fn appkit_to_quartz(rect: Rect, primary_top: f64) -> Option<Rect> {
         height: rect.height.abs(),
     };
     result.valid().then_some(result)
+}
+
+pub fn same_menu_item(window: Rect, element: Rect) -> bool {
+    window.valid()
+        && element.valid()
+        && window.width > 0.0
+        && window.height > 0.0
+        && element.width > 0.0
+        && element.height > 0.0
+        && window.contains(
+            element.x + element.width / 2.0,
+            element.y + element.height / 2.0,
+        )
+        && element.contains(
+            window.x + window.width / 2.0,
+            window.y + window.height / 2.0,
+        )
 }

@@ -260,3 +260,8 @@ pub unsafe extern "C" fn lb_store_journal(
     let data = unsafe { std::slice::from_raw_parts(data, size) };
     u32::from(crate::storage::store_journal(std::path::Path::new(path), data).is_ok())
 }
+
+#[no_mangle]
+pub extern "C" fn lb_same_menu_item(window: Rect, element: Rect) -> u32 {
+    u32::from(crate::geometry::same_menu_item(window, element))
+}

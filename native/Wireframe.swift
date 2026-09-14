@@ -176,6 +176,10 @@ final class SettingsWindow: NSWindow {
         contentView = scroll
         stack.translatesAutoresizingMaskIntoConstraints = false
         stack.widthAnchor.constraint(equalTo: scroll.contentView.widthAnchor).isActive = true
+        stack.addArrangedSubview(permission)
+        stack.addArrangedSubview(NSStackView(views: [NSButton(title: "Accessibility permission", target: self, action: #selector(requestAccessibility)),
+            NSButton(title: "Window names permission", target: self, action: #selector(requestWindowNames))]))
+        stack.addArrangedSubview(NSTextField(wrappingLabelWithString: "No screenshots are captured. macOS may require Screen Recording permission to disclose other apps' menu-item names. Basic hiding works without it."))
         for (key, title) in [("ShowIceIcon", "Show Litebar menu-bar icon"), ("UseIceBar", "Show hidden items in a separate text bar"),
             ("ShowOnClick", "Reveal when empty menu-bar space is clicked"), ("ShowOnHover", "Reveal on hover"), ("ShowOnScroll", "Reveal or hide on scroll"),
             ("AutoRehide", "Automatically rehide"), ("EnableAlwaysHiddenSection", "Enable always-hidden section"), ("CanToggleAlwaysHiddenSection", "Option-click toggles always-hidden"),
@@ -225,10 +229,6 @@ final class SettingsWindow: NSWindow {
         stack.addArrangedSubview(NSStackView(views: [NSTextField(labelWithString: "Spacing offset"), spacing, apply]))
         stack.addArrangedSubview(NSTextField(wrappingLabelWithString: "Spacing is system-wide. Changes take effect when apps next launch or at your next login. Litebar never force-quits other apps."))
         stack.addArrangedSubview(NSButton(title: "Back up and forget recovery records…", target: controller, action: #selector(Controller.forgetRecovery)))
-        stack.addArrangedSubview(permission)
-        stack.addArrangedSubview(NSStackView(views: [NSButton(title: "Accessibility permission", target: self, action: #selector(requestAccessibility)),
-            NSButton(title: "Window names permission", target: self, action: #selector(requestWindowNames))]))
-        stack.addArrangedSubview(NSTextField(wrappingLabelWithString: "No screenshots are captured. macOS may require Screen Recording permission to disclose other apps' menu-item names. Basic hiding works without it."))
         refresh()
         center()
     }

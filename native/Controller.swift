@@ -56,6 +56,7 @@ final class Controller: NSObject, NSApplicationDelegate, NSMenuDelegate {
         return base.appendingPathComponent("com.vincenthopf.Litebar").appendingPathComponent("recovery.plist")
     }
     private var operation: Task<Void, Never>?
+    private var ownerRefresh: Task<Void, Never>?
     private var previousApplication: NSRunningApplication?
     private var closing = false
     private var observingMenus = 0
@@ -120,7 +121,7 @@ final class Controller: NSObject, NSApplicationDelegate, NSMenuDelegate {
         installMonitors()
         let errors = hotkeys.install()
         if !errors.isEmpty { report(AppError.message(errors.joined(separator: "\n"))) }
-        if !benchmark && !settings.defaults.bool(forKey: "LitebarHasLaunched") {
+        if !benchmark && (!settings.defaults.bool(forKey: "LitebarHasLaunched") || !AXIsProcessTrusted() || !CGPreflightScreenCaptureAccess()) {
             settings.defaults.set(true, forKey: "LitebarHasLaunched")
             openSettings()
         }
@@ -139,10 +140,10 @@ final class Controller: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     private func render() {
         icon?.setVisible(settings.bool("ShowIceIcon"))
-        icon?.resize(28, text: state.revealed == 0 ? "LB" : "‹")
-        hidden?.resize(showingForDrag ? 20 : lb_hidden_length(state, settings.config), text: "|")
+        icon?.resize(28, text: "LB")
+        hidden?.resize(showingForDrag ? 150 : lb_hidden_length(state, settings.config), text: showingForDrag ? "Hidden | Visible" : "|")
         always?.setVisible(settings.bool("EnableAlwaysHiddenSection"))
-        always?.resize(showingForDrag ? 20 : lb_always_length(state, settings.config), text: "|")
+        always?.resize(showingForDrag ? 150 : lb_always_length(state, settings.config), text: showingForDrag ? "Always-hidden | Hidden" : "|")
         inventory.invalidate()
         if state.panel != 0 { presentItems(section: state.panel == 2 ? 4 : 2, activate: false) }
         else if itemPanel?.isVisible == true { releaseItems() }
@@ -246,8 +247,12 @@ final class Controller: NSObject, NSApplicationDelegate, NSMenuDelegate {
     func settingsClosed() { settingsWindow = nil }
 
     private var screen: NSScreen? {
-        if cachedFullscreen { return NSScreen.screens.first { $0.frame.contains(NSEvent.mouseLocation) } ?? NSScreen.main }
-        return NSScreen.main ?? NSScreen.screens.first
+        if let frame = icon?.windowID.flatMap(server.frame),
+           let hosted = NSScreen.screens.first(where: { candidate in
+               guard let number = candidate.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber else { return false }
+               return CGDisplayBounds(number.uint32Value).contains(CGPoint(x: frame.midX, y: frame.midY))
+           }) { return hosted }
+        return NSScreen.screens.first { $0.frame.contains(NSEvent.mouseLocation) } ?? NSScreen.main
     }
 
     private func presentItems(section: UInt32, activate: Bool) {
@@ -277,6 +282,15 @@ final class Controller: NSObject, NSApplicationDelegate, NSMenuDelegate {
         inventory.refresh(hiddenID: hidden?.windowID, alwaysID: settings.bool("EnableAlwaysHiddenSection") ? always?.windowID : nil, force: force)
         let message = inventory.reliable ? "Double-click to open. Drag rows or choose a section to move. \(temporary.count) temporary item(s)." : "The item inventory is unavailable. Refresh after granting access or switching back to the original desktop. Basic hiding still works."
         itemPanel?.setItems(displayItems, message: lastError ?? message)
+        if ownerRefresh == nil {
+            ownerRefresh = Task { [weak self] in
+                guard let self else { return }
+                await self.inventory.resolveOwners(force: force)
+                self.ownerRefresh = nil
+                guard !Task.isCancelled, !self.closing else { return }
+                self.itemPanel?.setItems(self.displayItems, message: self.lastError ?? message)
+            }
+        }
     }
 
     private func observe() {
@@ -362,11 +376,11 @@ final class Controller: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     private func installMonitors(force: Bool = false) {
         guard !closing, state.suspended == 0 else { return }
-        let movement = settings.bool("ShowOnHover") || state.revealed != 0 || state.panel != 0
+        let movement = settings.bool("ShowOnHover") || state.revealed != 0 || state.panel != 0 || NSEvent.modifierFlags.contains(.command)
         guard force || eventMonitor == nil || movement != monitoringMovement else { return }
         stopMonitors()
         monitoringMovement = movement
-        var mask: NSEvent.EventTypeMask = [.leftMouseDown, .leftMouseUp, .rightMouseDown, .rightMouseUp, .otherMouseDown, .otherMouseUp, .leftMouseDragged]
+        var mask: NSEvent.EventTypeMask = [.leftMouseDown, .leftMouseUp, .rightMouseDown, .rightMouseUp, .otherMouseDown, .otherMouseUp, .leftMouseDragged, .flagsChanged]
         if movement { mask.insert(.mouseMoved) }
         if settings.bool("ShowOnScroll") { mask.insert(.scrollWheel) }
         eventMonitor = NSEvent.addGlobalMonitorForEvents(matching: mask) { [weak self] event in MainActor.assumeIsolated { self?.input(event) } }
@@ -389,11 +403,8 @@ final class Controller: NSObject, NSApplicationDelegate, NSMenuDelegate {
         if let panel = itemPanel, panel.isVisible, panel.frame.insetBy(dx: -10, dy: -10).contains(appkit) { send(.pointerBar); return }
         let top = NSScreen.screens.first?.frame.maxY ?? 0
         let point = CGPoint(x: appkit.x, y: top - appkit.y)
-        var inside = appkit.y > screen.visibleFrame.maxY && appkit.y <= screen.frame.maxY && appkit.x >= screen.frame.minX && appkit.x < screen.frame.maxX
-        if cachedFullscreen || NSApp.currentSystemPresentationOptions.contains(.autoHideMenuBar) || NSApp.currentSystemPresentationOptions.contains(.hideMenuBar) {
-            if let frame = hidden?.status.button?.window?.frame { inside = appkit.y >= frame.minY && appkit.y < frame.maxY && appkit.x >= screen.frame.minX && appkit.x < screen.frame.maxX }
-            else { inside = false }
-        }
+        let hostedFrame = icon?.windowID.flatMap(server.frame) ?? hidden?.windowID.flatMap(server.frame)
+        let inside = hostedFrame.map { point.y >= $0.minY && point.y < $0.maxY && appkit.x >= screen.frame.minX && appkit.x < screen.frame.maxX } ?? false
         guard inside else { send(.pointerOutside); return }
         if let left = screen.auxiliaryTopLeftArea, let right = screen.auxiliaryTopRightArea, appkit.x >= left.maxX && appkit.x < right.minX { send(.pointerBar); return }
         guard settings.bool("ShowOnHover") || settings.bool("ShowOnClick") || settings.bool("ShowContextMenuOnRightClick") else { send(.pointerBar); return }
@@ -409,16 +420,17 @@ final class Controller: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private func input(_ event: NSEvent) {
         guard !actions.busy, !closing else { return }
         updatePointer()
+        if settings.bool("ShowAllSectionsOnUserDrag"), event.modifierFlags.contains(.command), state.pointer != 0, !showingForDrag,
+           [.flagsChanged, .mouseMoved, .leftMouseDown, .leftMouseDragged].contains(event.type) {
+            showingForDrag = true
+            send(.userDragBegin)
+            render()
+        }
         switch event.type {
-        case .mouseMoved: break
-        case .leftMouseDragged:
-            if event.modifierFlags.contains(.command), state.pointer != 0, settings.bool("ShowAllSectionsOnUserDrag") {
-                if !showingForDrag {
-                    showingForDrag = true
-                    send(.userDragBegin)
-                    render()
-                }
-            }
+        case .flagsChanged:
+            if showingForDrag && !event.modifierFlags.contains(.command) { showingForDrag = false; render() }
+            installMonitors()
+        case .mouseMoved, .leftMouseDragged: break
         case .leftMouseDown, .rightMouseDown, .otherMouseDown:
             if state.pointer != 0 { send(.preventHover) }
             send(.buttonDown)
@@ -597,7 +609,7 @@ final class Controller: NSObject, NSApplicationDelegate, NSMenuDelegate {
             releaseItems()
             defer { armTemporaryTimer() }
             let physicalFrame = server.frame(item.id)
-            let visible = item.onScreen && physicalFrame.map { visibleForClick($0) } == true
+            let visible = physicalFrame.map { visibleForClick($0) } == true
             if !visible {
                 guard recoveryAvailable, temporary.count < 16, let screen, let space = server.activeSpace,
                       let menu = Accessibility.applicationMenuFrame(screen: screen), item.section != 0,
@@ -819,6 +831,8 @@ final class Controller: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
     func applicationWillTerminate(_ notification: Notification) { stop() }
     func stop() {
+        ownerRefresh?.cancel()
+        ownerRefresh = nil
         closing = true
         timer?.invalidate()
         cancelAuxiliaryTimers()

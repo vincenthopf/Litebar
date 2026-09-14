@@ -38,6 +38,6 @@ fi
 cp LICENSE "$out/Contents/Resources/LICENSE"
 if [ -f NOTICE ]; then cp NOTICE "$out/Contents/Resources/NOTICE"; fi
 plutil -lint "$out/Contents/Info.plist"
-codesign --sign - "$out"
+codesign --sign "${LITEBAR_SIGN_IDENTITY:--}" "$out"
 codesign --verify --strict "$out"
 printf '%s\n' "$out"

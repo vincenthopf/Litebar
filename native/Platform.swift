@@ -40,6 +40,7 @@ final class WindowServer {
     }
 
     func matches(_ item: BarItem) -> Bool {
+        if let owner = item.ownerPID, NSRunningApplication(processIdentifier: owner)?.isTerminated != false { return false }
         guard let raw = lb_copy_window_description(item.id),
               let descriptions = Unmanaged<CFArray>.fromOpaque(raw).takeRetainedValue() as? [[String: Any]],
               let value = descriptions.first(where: { $0[kCGWindowNumber as String] as? UInt32 == item.id }) else { return false }
@@ -59,12 +60,14 @@ struct BarItem: Identifiable {
     let pid: pid_t
     let namespace: String
     let title: String
-    let name: String
+    var name: String
     let frame: CGRect
     let onScreen: Bool
-    let flags: UInt32
+    var flags: UInt32
+    var ownerPID: pid_t? = nil
+    var ownerNamespace: String? = nil
     var section: UInt32 = 0
-    var identity: String { namespace + ":" + title }
+    var identity: String { (ownerNamespace ?? namespace) + ":" + (title.isEmpty ? "window:\(id)" : title) }
 }
 
 @MainActor
@@ -76,10 +79,11 @@ final class Inventory {
     private(set) var refreshedAt: UInt64 = 0
     private(set) var dirty = true
     private(set) var reliable = false
+    private var owners: [UInt32: (title: String, owner: MenuItemOwner)] = [:]
 
     init(server: WindowServer) { self.server = server }
     func invalidate() { dirty = true }
-    func clear() { items.removeAll(keepingCapacity: false); dirty = true; reliable = false }
+    func clear() { items.removeAll(keepingCapacity: false); owners.removeAll(); dirty = true; reliable = false }
 
     func refresh(hiddenID: UInt32?, alwaysID: UInt32?, force: Bool = false) {
         let now = monotonicMilliseconds()
@@ -121,7 +125,42 @@ final class Inventory {
             result.append(item)
         }
         items = result.sorted { $0.frame.minX == $1.frame.minX ? $0.id < $1.id : $0.frame.minX < $1.frame.minX }
+        applyOwners()
         generation &+= 1
+    }
+
+    func resolveOwners(force: Bool) async {
+        if force || owners.isEmpty {
+            let processes = NSWorkspace.shared.runningApplications.compactMap { app -> MenuOwnerProcess? in
+                guard let namespace = app.bundleIdentifier, !app.isTerminated else { return nil }
+                return MenuOwnerProcess(pid: app.processIdentifier, namespace: namespace, name: app.localizedName ?? namespace)
+            }
+            let worker = Task.detached(priority: .userInitiated) { Accessibility.menuItemOwners(processes) }
+            let entries = await withTaskCancellationHandler { await worker.value } onCancel: { worker.cancel() }
+            guard !Task.isCancelled else { return }
+            let ids = Set(items.map(\.id))
+            owners = owners.filter { ids.contains($0.key) }
+            for item in items where item.namespace == "com.apple.controlcenter" || item.namespace == "com.apple.systemuiserver" {
+                guard let current = server.frame(item.id) else { continue }
+                let matches = entries.filter { lb_same_menu_item(current.rust, $0.frame.rust) != 0 }
+                if matches.count == 1 { owners[item.id] = (item.title, matches[0]) }
+            }
+        }
+        applyOwners()
+    }
+
+    private func applyOwners() {
+        for index in items.indices {
+            let item = items[index]
+            guard let cached = owners[item.id], cached.title == item.title else { continue }
+            let owner = cached.owner
+            items[index].ownerPID = owner.pid
+            items[index].ownerNamespace = owner.namespace
+            items[index].name = item.title.contains("TimeMachine") && owner.namespace == "com.apple.systemuiserver" ? "Time Machine" : owner.name
+            if owner.namespace != "com.apple.controlcenter" && owner.namespace != "com.apple.systemuiserver" {
+                items[index].flags = identityFlags(owner.namespace, item.title)
+            }
+        }
     }
 
     static func displayName(namespace: String, title: String, owner: String) -> String {
@@ -129,7 +168,7 @@ final class Inventory {
             let names = ["AccessibilityShortcuts": "Accessibility Shortcuts", "BentoBox": "Control Center", "FocusModes": "Focus",
                          "KeyboardBrightness": "Keyboard Brightness", "MusicRecognition": "Music Recognition", "NowPlaying": "Now Playing",
                          "ScreenMirroring": "Screen Mirroring", "StageManager": "Stage Manager", "UserSwitcher": "Fast User Switching", "WiFi": "Wi-Fi"]
-            return names[title] ?? (title.isEmpty ? owner : title)
+            return names[title] ?? (title.hasPrefix("BentoBox-") ? "Control Center" : title.isEmpty || title.hasPrefix("Item-") ? "Unidentified menu item" : title)
         }
         if namespace == "com.apple.systemuiserver" {
             return title.contains("TMMenuExtraHost") ? "Time Machine" : (title.isEmpty ? owner : title)
@@ -199,11 +238,66 @@ final class Divider {
     }
 }
 
+struct MenuOwnerProcess: Sendable {
+    let pid: pid_t
+    let namespace: String
+    let name: String
+}
+
+struct MenuItemOwner: Sendable {
+    let pid: pid_t
+    let namespace: String
+    let name: String
+    let frame: CGRect
+}
+
 @MainActor
 enum Accessibility {
-    static func attribute(_ element: AXUIElement, _ key: String) -> CFTypeRef? {
+    nonisolated static func attribute(_ element: AXUIElement, _ key: String) -> CFTypeRef? {
         var value: CFTypeRef?
         return AXUIElementCopyAttributeValue(element, key as CFString, &value) == .success ? value : nil
+    }
+
+    nonisolated static func menuItemOwners(_ processes: [MenuOwnerProcess]) -> [MenuItemOwner] {
+        guard AXIsProcessTrusted() else { return [] }
+        let deadline = monotonicMilliseconds() + 3000
+        var result: [MenuItemOwner] = []
+        let keys = [kAXTitleAttribute, kAXDescriptionAttribute, kAXIdentifierAttribute, kAXHelpAttribute, kAXPositionAttribute, kAXSizeAttribute] as CFArray
+        for app in processes {
+            guard !Task.isCancelled, monotonicMilliseconds() < deadline else { break }
+            let namespace = app.namespace
+            let root = AXUIElementCreateApplication(app.pid)
+            AXUIElementSetMessagingTimeout(root, 0.02)
+            guard let raw = attribute(root, kAXExtrasMenuBarAttribute), CFGetTypeID(raw) == AXUIElementGetTypeID() else { continue }
+            let bar = unsafeBitCast(raw, to: AXUIElement.self)
+            AXUIElementSetMessagingTimeout(bar, 0.02)
+            guard let children = attribute(bar, kAXChildrenAttribute) as? [AXUIElement] else { continue }
+            for child in children.prefix(64) {
+                guard !Task.isCancelled, monotonicMilliseconds() < deadline else { break }
+                AXUIElementSetMessagingTimeout(child, 0.02)
+                var rawFields: CFArray?
+                guard AXUIElementCopyMultipleAttributeValues(child, keys, [], &rawFields) == .success,
+                      let fields = rawFields as? [Any], fields.count == 6 else { continue }
+                let p = fields[4] as CFTypeRef
+                let s = fields[5] as CFTypeRef
+                guard CFGetTypeID(p) == AXValueGetTypeID(), CFGetTypeID(s) == AXValueGetTypeID() else { continue }
+                var point = CGPoint.zero
+                var size = CGSize.zero
+                guard AXValueGetValue(unsafeBitCast(p, to: AXValue.self), .cgPoint, &point),
+                      AXValueGetValue(unsafeBitCast(s, to: AXValue.self), .cgSize, &size), size.width > 0, size.height > 0 else { continue }
+                let frame = CGRect(origin: point, size: size)
+                guard frame.finite else { continue }
+                let detail = [fields[1], fields[0], fields[3], fields[2]].compactMap { $0 as? String }.first { !$0.isEmpty }
+                let owner = app.name
+                let system = namespace == "com.apple.controlcenter" || namespace == "com.apple.systemuiserver"
+                let name: String
+                if system { name = detail ?? owner }
+                else if children.count > 1, let detail { name = owner + " · " + String(detail.split(separator: ":", maxSplits: 1).first ?? Substring(detail)) }
+                else { name = owner }
+                result.append(MenuItemOwner(pid: app.pid, namespace: namespace, name: name, frame: frame))
+            }
+        }
+        return result
     }
 
     static func applicationMenuFrame(screen: NSScreen) -> CGRect? {

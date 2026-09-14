@@ -243,8 +243,11 @@ final class ItemActions {
     }
 
     private func movementPlan(_ item: BarItem, _ target: BarItem, _ frame: CGRect, _ destination: CGRect, _ right: Bool, _ section: UInt32) throws -> LBMovePlan {
-        guard let screen = NSScreen.main,
-              let id = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber else { throw AppError.message("The active display disappeared.") }
+        let anchor = CGPoint(x: destination.width >= 10000 ? destination.maxX - 0.5 : destination.midX, y: destination.midY)
+        guard let screen = NSScreen.screens.first(where: { candidate in
+            guard let number = candidate.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber else { return false }
+            return CGDisplayBounds(number.uint32Value).contains(anchor)
+        }), let id = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber else { throw AppError.message("The target display disappeared.") }
         let activeBounds = CGDisplayBounds(id.uint32Value)
         for candidate in [frame, destination] where candidate.width < 10000 && !activeBounds.intersects(candidate) {
             let otherDisplay = NSScreen.screens.contains { other in

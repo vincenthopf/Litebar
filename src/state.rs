@@ -78,7 +78,7 @@ pub struct State {
     pub tracking: u32,
     pub hover_blocked: u32,
     pub suspended: u32,
-    pub reserved: u32,
+    pub pending_rehide: u32,
     pub hover_deadline: u64,
     pub rehide_deadline: u64,
     pub last_time: u64,
@@ -127,6 +127,7 @@ impl State {
     }
 
     fn hide_all(&mut self) {
+        self.pending_rehide = 0;
         self.revealed = 0;
         self.panel = 0;
         self.hover_deadline = 0;
@@ -151,6 +152,7 @@ impl State {
     }
 
     fn show(&mut self, section: u32, config: Config, now: u64) {
+        self.pending_rehide = 0;
         if section == 2 && !config.enabled(ALWAYS_ENABLED) {
             return;
         }
@@ -166,6 +168,7 @@ impl State {
     }
 
     pub fn reconfigure(mut self, config: Config, now: u64) -> Self {
+        self.pending_rehide = 0;
         let config = config.normalized();
         let now = now.max(self.last_time).max(1);
         self.last_time = now;
@@ -198,6 +201,7 @@ impl State {
             return self;
         }
         if event == RESUME {
+            self.pending_rehide = 0;
             self.suspended = 0;
             self.pointer = 0;
             self.buttons = 0;
@@ -236,6 +240,7 @@ impl State {
                 self.hover_deadline = 0;
             }
             USER_DRAG_BEGIN => {
+                self.pending_rehide = 0;
                 self.panel = 0;
                 self.revealed = if config.enabled(ALWAYS_ENABLED) { 3 } else { 1 };
                 self.hover_blocked = 2;
@@ -292,12 +297,11 @@ impl State {
             SCROLL_HIDE if config.enabled(SCROLL) && self.pointer != 0 => self.hide_all(),
             FOCUS_CHANGED | SMART_REHIDE
                 if config.enabled(AUTO_REHIDE)
-                    && !self.blocked()
-                    && self.pointer == 0
+                    && (event == FOCUS_CHANGED || self.pointer == 0)
                     && ((event == FOCUS_CHANGED && config.rehide_strategy == FOCUSED_APP)
                         || (event == SMART_REHIDE && config.rehide_strategy == SMART)) =>
             {
-                self.hide_all();
+                self.pending_rehide = if event == FOCUS_CHANGED { 1 } else { 2 };
             }
             MENU_BEGIN => {
                 self.tracking = self.tracking.saturating_add(1);
@@ -339,6 +343,12 @@ impl State {
                 }
             }
             _ => {}
+        }
+        if self.pending_rehide != 0
+            && !self.blocked()
+            && (self.pending_rehide == 1 || self.pointer == 0)
+        {
+            self.hide_all();
         }
         self
     }

@@ -180,3 +180,112 @@ fn all_native_event_sequences_remain_bounded() {
         }
     }
 }
+
+#[test]
+fn focused_rehide_waits_for_mouse_up_without_losing_the_focus_change() {
+    let config = Config {
+        flags: AUTO_REHIDE,
+        rehide_strategy: FOCUSED_APP,
+        ..Config::default()
+    };
+    let shown = State::default().step(config, SHOW_HIDDEN, 1);
+    let down = shown
+        .step(config, BUTTON_DOWN, 2)
+        .step(config, FOCUS_CHANGED, 3);
+    assert!(down.any_visible());
+    assert_eq!(down.pending_rehide, 1);
+    assert!(!down.step(config, BUTTON_UP, 4).any_visible());
+}
+
+#[test]
+fn focused_rehide_waits_for_tracked_menus_to_close() {
+    let config = Config {
+        flags: AUTO_REHIDE,
+        rehide_strategy: FOCUSED_APP,
+        ..Config::default()
+    };
+    let pending = State::default()
+        .step(config, SHOW_HIDDEN, 1)
+        .step(config, MENU_BEGIN, 2)
+        .step(config, FOCUS_CHANGED, 3);
+    assert!(pending.any_visible());
+    assert!(!pending.step(config, MENU_END, 4).any_visible());
+}
+
+#[test]
+fn changing_rehide_settings_cancels_a_pending_focus_change() {
+    let config = Config {
+        flags: AUTO_REHIDE,
+        rehide_strategy: FOCUSED_APP,
+        ..Config::default()
+    };
+    let pending = State::default()
+        .step(config, SHOW_HIDDEN, 1)
+        .step(config, BUTTON_DOWN, 2)
+        .step(config, FOCUS_CHANGED, 3);
+    let disabled = Config { flags: 0, ..config };
+    assert!(pending
+        .reconfigure(disabled, 4)
+        .step(disabled, BUTTON_UP, 5)
+        .any_visible());
+}
+
+#[test]
+fn hosted_ownership_matches_padded_frames_on_negative_displays() {
+    let window = Rect {
+        x: -217.0,
+        y: 0.0,
+        width: 36.0,
+        height: 30.0,
+    };
+    let button = Rect {
+        x: -218.0,
+        y: 3.0,
+        width: 38.0,
+        height: 24.0,
+    };
+    assert_eq!(lb_same_menu_item(window, button), 1);
+    assert_eq!(
+        lb_same_menu_item(
+            window,
+            Rect {
+                x: 2382.0,
+                ..button
+            }
+        ),
+        0
+    );
+    assert_eq!(
+        lb_same_menu_item(
+            window,
+            Rect {
+                width: 0.0,
+                ..button
+            }
+        ),
+        0
+    );
+    assert_eq!(
+        lb_same_menu_item(
+            window,
+            Rect {
+                x: f64::NAN,
+                ..button
+            }
+        ),
+        0
+    );
+}
+
+#[test]
+fn focused_rehide_does_not_require_moving_the_pointer_off_the_bar() {
+    let config = Config {
+        flags: AUTO_REHIDE,
+        rehide_strategy: FOCUSED_APP,
+        ..Config::default()
+    };
+    let shown = State::default()
+        .step(config, SHOW_HIDDEN, 1)
+        .step(config, POINTER_BAR, 2);
+    assert!(!shown.step(config, FOCUS_CHANGED, 3).any_visible());
+}

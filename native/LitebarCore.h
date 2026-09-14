@@ -5,7 +5,7 @@
 typedef struct { double x, y, width, height; } LBRect;
 typedef struct { uint32_t flags, rehide_strategy; uint64_t rehide_ms, hover_ms; } LBConfig;
 typedef struct {
-    uint32_t revealed, panel, pointer, buttons, tracking, hover_blocked, suspended, reserved;
+    uint32_t revealed, panel, pointer, buttons, tracking, hover_blocked, suspended, pending_rehide;
     uint64_t hover_deadline, rehide_deadline, last_time;
 } LBState;
 typedef struct {
@@ -33,6 +33,7 @@ uint32_t lb_window_server_available(void);
 uint64_t lb_active_space(void);
 uint32_t lb_fullscreen(void);
 uint32_t lb_window_frame(uint32_t, LBRect *);
+uint32_t lb_same_menu_item(LBRect, LBRect);
 const void *lb_copy_window_descriptions(void);
 const void *lb_copy_window_description(uint32_t);
 int32_t lb_cursor_property(void);
