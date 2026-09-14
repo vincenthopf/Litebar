@@ -54,6 +54,16 @@ pub unsafe extern "C" fn lb_status_item_window_id(object: Ref, local_number: i64
                 unsafe { std::mem::transmute(implementation) };
             unsafe { get(object, selector) }
         }
+        b'i' => {
+            let get: unsafe extern "C" fn(Ref, Ref) -> i32 =
+                unsafe { std::mem::transmute(implementation) };
+            u64::try_from(unsafe { get(object, selector) }).unwrap_or(0)
+        }
+        b'q' => {
+            let get: unsafe extern "C" fn(Ref, Ref) -> i64 =
+                unsafe { std::mem::transmute(implementation) };
+            u64::try_from(unsafe { get(object, selector) }).unwrap_or(0)
+        }
         _ => return 0,
     };
     u32::try_from(id).unwrap_or(0)

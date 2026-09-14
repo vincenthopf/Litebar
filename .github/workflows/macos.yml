@@ -39,6 +39,15 @@ jobs:
         run: |
           set -o pipefail
           bash scripts/build-macos.sh 2>&1 | tee evidence/build.txt
+      - name: Validate native status hosting and real hide/show
+        run: |
+          set -o pipefail
+          case "$(uname -m)" in
+            arm64) target=aarch64-apple-darwin ;;
+            x86_64) target=x86_64-apple-darwin ;;
+          esac
+          xcrun swiftc -swift-version 5 -O -import-objc-header native/LitebarCore.h tests/native/hosting.swift "target/$target/release/liblitebar_core.a" -framework AppKit -framework CoreGraphics -framework CoreFoundation -framework ApplicationServices -liconv -o "$RUNNER_TEMP/hosting-tests"
+          "$RUNNER_TEMP/hosting-tests" 2>&1 | tee evidence/hosting-tests.txt
       - name: Validate native ABI, transport cleanup, and wireframe
         env:
           LITEBAR_VALIDATION_DIR: evidence
