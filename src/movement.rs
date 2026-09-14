@@ -39,23 +39,71 @@ pub struct Plan {
     pub already_adjacent: bool,
 }
 
-pub fn plan(source: Item<'_>, target: Item<'_>, side: Side, section: Section) -> Result<Plan, MoveError> {
-    if source.window_id == 0 || target.window_id == 0 || source.process_id <= 0 || target.process_id <= 0
-        || !source.frame.valid() || !target.frame.valid() || source.frame.width <= 0.0
-        || source.frame.height <= 0.0 || target.frame.width < 0.0 || target.frame.height <= 0.0
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Candidate {
+    pub window_id: u32,
+    pub process_id: i32,
+    pub display_id: u32,
+    pub flags: u32,
+    pub frame: Rect,
+}
+
+impl From<Item<'_>> for Candidate {
+    fn from(item: Item<'_>) -> Self {
+        Self {
+            window_id: item.window_id,
+            process_id: item.process_id,
+            display_id: item.display_id,
+            flags: u32::from(item.identity.movable()) | (u32::from(item.identity.hideable()) << 1),
+            frame: item.frame,
+        }
+    }
+}
+
+pub fn plan(
+    source: Item<'_>,
+    target: Item<'_>,
+    side: Side,
+    section: Section,
+) -> Result<Plan, MoveError> {
+    plan_candidates(source.into(), target.into(), side, section)
+}
+
+pub fn plan_candidates(
+    source: Candidate,
+    target: Candidate,
+    side: Side,
+    section: Section,
+) -> Result<Plan, MoveError> {
+    if source.window_id == 0
+        || target.window_id == 0
+        || source.process_id <= 0
+        || target.process_id <= 0
+        || !source.frame.valid()
+        || !target.frame.valid()
+        || source.frame.width <= 0.0
+        || source.frame.height <= 0.0
+        || target.frame.width < 0.0
+        || target.frame.height <= 0.0
     {
         return Err(MoveError::InvalidItem);
     }
     if source.window_id == target.window_id {
         return Err(MoveError::SameItem);
     }
-    if source.display_id != target.display_id {
+    if source.display_id == 0
+        || source.display_id != target.display_id
+        || (source.frame.y + source.frame.height / 2.0 - target.frame.y - target.frame.height / 2.0)
+            .abs()
+            >= 2.0
+    {
         return Err(MoveError::DifferentDisplay);
     }
-    if !source.identity.movable() {
+    if source.flags & 1 == 0 {
         return Err(MoveError::ProtectedItem);
     }
-    if section != Section::Visible && !source.identity.hideable() {
+    if section != Section::Visible && source.flags & 2 == 0 {
         return Err(MoveError::CannotHide);
     }
     let edge = match side {
@@ -63,8 +111,8 @@ pub fn plan(source: Item<'_>, target: Item<'_>, side: Side, section: Section) ->
         Side::Right => target.frame.max_x(),
     };
     let adjacent = match side {
-        Side::Left => source.frame.max_x() == target.frame.min_x(),
-        Side::Right => source.frame.min_x() == target.frame.max_x(),
+        Side::Left => (source.frame.max_x() - target.frame.min_x()).abs() < 1.0,
+        Side::Right => (source.frame.min_x() - target.frame.max_x()).abs() < 1.0,
     };
     Ok(Plan {
         source_window: source.window_id,
@@ -72,7 +120,10 @@ pub fn plan(source: Item<'_>, target: Item<'_>, side: Side, section: Section) ->
         source_pid: source.process_id,
         target_pid: target.process_id,
         target_point: (edge, target.frame.y + target.frame.height / 2.0),
-        fallback_point: (source.frame.x + source.frame.width / 2.0, source.frame.y + source.frame.height / 2.0),
+        fallback_point: (
+            source.frame.x + source.frame.width / 2.0,
+            source.frame.y + source.frame.height / 2.0,
+        ),
         already_adjacent: adjacent,
     })
 }
@@ -84,11 +135,13 @@ pub enum Poll {
     Complete,
 }
 
+#[repr(C)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct FrameWait {
     deadline: u64,
     next_observation: u64,
-    complete: bool,
+    complete: u32,
+    reserved: u32,
 }
 
 impl FrameWait {
@@ -96,12 +149,13 @@ impl FrameWait {
         Self {
             deadline: now.saturating_add(timeout_ms.clamp(1, 1000)),
             next_observation: now,
-            complete: false,
+            complete: 0,
+            reserved: 0,
         }
     }
 
     pub fn poll(&mut self, now: u64) -> Result<Poll, MoveError> {
-        if self.complete {
+        if self.complete != 0 {
             return Ok(Poll::Complete);
         }
         if now >= self.deadline {
@@ -115,30 +169,31 @@ impl FrameWait {
     }
 
     pub fn observe(&mut self, changed: bool) {
-        self.complete |= changed;
+        self.complete |= u32::from(changed);
     }
 }
 
+#[repr(C)]
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct MoveLease {
-    active: bool,
-    attempt: u8,
+    active: u32,
+    attempt: u32,
     deadline: u64,
 }
 
 impl MoveLease {
     pub fn begin(&mut self, now: u64) -> Result<(), MoveError> {
-        if self.active {
+        if self.active != 0 {
             return Err(MoveError::Busy);
         }
-        self.active = true;
+        self.active = 1;
         self.attempt = 0;
         self.deadline = now.saturating_add(2000);
         Ok(())
     }
 
-    pub fn next_attempt(&mut self, now: u64) -> Result<u8, MoveError> {
-        if !self.active {
+    pub fn next_attempt(&mut self, now: u64) -> Result<u32, MoveError> {
+        if self.active == 0 {
             return Err(MoveError::Failed);
         }
         if now >= self.deadline {

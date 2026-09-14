@@ -30,6 +30,8 @@ pub const RESUME: u32 = 17;
 pub const SHOW_HIDDEN: u32 = 18;
 pub const SHOW_ALWAYS: u32 = 19;
 pub const SMART_REHIDE: u32 = 20;
+pub const PREVENT_HOVER: u32 = 21;
+pub const USER_DRAG_BEGIN: u32 = 22;
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -103,9 +105,17 @@ impl State {
     }
 
     pub fn lengths(self, config: Config) -> (f64, f64) {
-        let narrow = if config.enabled(SHOW_DIVIDERS) { 20.0 } else { 1.0 };
+        let narrow = if config.enabled(SHOW_DIVIDERS) {
+            20.0
+        } else {
+            1.0
+        };
         (
-            if self.revealed & 1 != 0 { narrow } else { 10000.0 },
+            if self.revealed & 1 != 0 {
+                narrow
+            } else {
+                10000.0
+            },
             if !config.enabled(ALWAYS_ENABLED) {
                 0.0
             } else if self.revealed & 2 != 0 {
@@ -130,8 +140,11 @@ impl State {
 
     fn arm_rehide(&mut self, config: Config, now: u64) {
         self.rehide_deadline = 0;
-        if self.any_visible() && self.pointer == 0 && !self.blocked()
-            && config.enabled(AUTO_REHIDE) && config.rehide_strategy == TIMED
+        if self.any_visible()
+            && self.pointer == 0
+            && !self.blocked()
+            && config.enabled(AUTO_REHIDE)
+            && config.rehide_strategy == TIMED
         {
             self.rehide_deadline = now.saturating_add(config.rehide_ms);
         }
@@ -218,6 +231,17 @@ impl State {
                     self.show(2, config, now);
                 }
             }
+            PREVENT_HOVER if self.any_visible() && !config.enabled(SEPARATE_PANEL) => {
+                self.hover_blocked = 2;
+                self.hover_deadline = 0;
+            }
+            USER_DRAG_BEGIN => {
+                self.panel = 0;
+                self.revealed = if config.enabled(ALWAYS_ENABLED) { 3 } else { 1 };
+                self.hover_blocked = 2;
+                self.hover_deadline = 0;
+                self.rehide_deadline = 0;
+            }
             HIDE_ALL => self.hide_all(),
             SHOW_HIDDEN => self.show(1, config, now),
             SHOW_ALWAYS => self.show(2, config, now),
@@ -226,8 +250,12 @@ impl State {
                 let changed = self.pointer != pointer;
                 self.pointer = pointer;
                 self.rehide_deadline = 0;
-                if event == POINTER_EMPTY && changed && config.enabled(HOVER)
-                    && !self.any_visible() && !self.blocked() && self.hover_blocked == 0
+                if event == POINTER_EMPTY
+                    && changed
+                    && config.enabled(HOVER)
+                    && !self.any_visible()
+                    && !self.blocked()
+                    && self.hover_blocked == 0
                 {
                     self.hover_deadline = now.saturating_add(config.hover_ms);
                 } else if event == POINTER_BAR || self.any_visible() {
@@ -237,10 +265,16 @@ impl State {
             POINTER_OUTSIDE => {
                 let changed = self.pointer != 0;
                 self.pointer = 0;
-                self.hover_blocked = 0;
+                if self.hover_blocked != 2 {
+                    self.hover_blocked = 0;
+                }
                 if changed {
                     self.hover_deadline = 0;
-                    if config.enabled(HOVER) && self.any_visible() && !self.blocked() {
+                    if config.enabled(HOVER)
+                        && self.any_visible()
+                        && !self.blocked()
+                        && self.hover_blocked == 0
+                    {
                         self.hover_deadline = now.saturating_add(config.hover_ms);
                     }
                     self.arm_rehide(config, now);
@@ -257,7 +291,9 @@ impl State {
             SCROLL_SHOW if config.enabled(SCROLL) && self.pointer != 0 => self.show(1, config, now),
             SCROLL_HIDE if config.enabled(SCROLL) && self.pointer != 0 => self.hide_all(),
             FOCUS_CHANGED | SMART_REHIDE
-                if config.enabled(AUTO_REHIDE) && !self.blocked() && self.pointer == 0
+                if config.enabled(AUTO_REHIDE)
+                    && !self.blocked()
+                    && self.pointer == 0
                     && ((event == FOCUS_CHANGED && config.rehide_strategy == FOCUSED_APP)
                         || (event == SMART_REHIDE && config.rehide_strategy == SMART)) =>
             {
