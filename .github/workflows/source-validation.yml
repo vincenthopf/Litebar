@@ -2,10 +2,12 @@ name: Source validation
 on:
   push:
     branches: [rewrite/rust-native]
-    paths: [.github/workflows/source-validation.yml]
   workflow_dispatch:
 permissions:
   contents: read
+concurrency:
+  group: source-${{ github.ref }}
+  cancel-in-progress: true
 jobs:
   source:
     runs-on: ubuntu-24.04
