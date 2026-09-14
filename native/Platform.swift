@@ -163,7 +163,10 @@ final class Divider {
         return UInt32(exactly: number)
     }
 
-    var windowID: UInt32? { status.button?.window.flatMap { Self.validWindowID($0.windowNumber) } }
+    var windowID: UInt32? {
+        let id = lb_status_item_window_id(Unmanaged.passUnretained(status).toOpaque(), Int64(status.button?.window?.windowNumber ?? -1))
+        return id == 0 ? nil : id
+    }
 
     func setVisible(_ visible: Bool) {
         guard status.isVisible != visible else { return }

@@ -12,3 +12,6 @@ pub mod state;
 mod macos;
 pub mod recovery;
 pub mod storage;
+
+#[cfg(target_os = "macos")]
+mod status_host;

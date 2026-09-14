@@ -28,6 +28,7 @@ uint32_t lb_identity_flags(const uint8_t *, size_t, const uint8_t *, size_t);
 LBEventSpec lb_event_spec(uint32_t, uint32_t);
 uint32_t lb_classic_transition(uint32_t, uint32_t, uint32_t);
 
+uint32_t lb_status_item_window_id(const void *, int64_t);
 uint32_t lb_window_server_available(void);
 uint64_t lb_active_space(void);
 uint32_t lb_fullscreen(void);

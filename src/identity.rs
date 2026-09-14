@@ -26,6 +26,12 @@ pub struct Identity<'a> {
     pub title: &'a str,
 }
 
+fn protected_title(title: &str) -> &str {
+    title.rsplit_once('-')
+        .filter(|(_, suffix)| !suffix.is_empty() && suffix.bytes().all(|byte| byte.is_ascii_digit()))
+        .map_or(title, |(name, _)| name)
+}
+
 impl<'a> Identity<'a> {
     pub fn parse(value: &'a str) -> Self {
         let (namespace, title) = value.split_once(':').unwrap_or((value, ""));
@@ -41,7 +47,7 @@ impl<'a> Identity<'a> {
 
     pub fn movable(self) -> bool {
         !matches!(
-            (self.namespace.as_str(), self.title),
+            (self.namespace.as_str(), protected_title(self.title)),
             ("com.apple.controlcenter", "Clock" | "BentoBox")
                 | ("com.apple.systemuiserver", "Siri")
         )
@@ -49,7 +55,7 @@ impl<'a> Identity<'a> {
 
     pub fn hideable(self) -> bool {
         !matches!(
-            (self.namespace.as_str(), self.title),
+            (self.namespace.as_str(), protected_title(self.title)),
             ("com.apple.controlcenter", "AudioVideoModule" | "FaceTime" | "MusicRecognition")
         )
     }
