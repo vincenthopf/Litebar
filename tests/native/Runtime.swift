@@ -13,7 +13,9 @@ private final class RuntimeTarget: NSObject {
 func validateRuntime(_ controller: Controller) async -> Int {
     var assertions = 0
     func check(_ value: @autoclosure () -> Bool, _ message: String) {
-        precondition(value(), message)
+        let passed = value()
+        fputs("\(passed ? "PASS" : "FAIL"): \(message)\n", stderr)
+        guard passed else { exit(1) }
         assertions += 1
     }
     func window(_ status: NSStatusItem) -> UInt32 {
@@ -76,7 +78,7 @@ func validateRuntime(_ controller: Controller) async -> Int {
     if AXIsProcessTrusted() {
         guard let source = controller.inventory.items.first(where: { $0.id == window(left) }),
               let destination = controller.inventory.items.first(where: { $0.id == window(right) }) else {
-            preconditionFailure("Native movement fixtures are absent from the WindowServer inventory")
+            runtimeFailure("Native movement fixtures are absent from the WindowServer inventory")
         }
         do {
             try await controller.actions.move(source, beside: destination, right: true, section: 1)
@@ -91,7 +93,7 @@ func validateRuntime(_ controller: Controller) async -> Int {
             await waitFor { target.clicks.contains(.rightMouseUp) }
             check(target.clicks.contains(.rightMouseUp), "synthetic right click reaches the status button")
             check(Delivery.activeTaps == 0 && !controller.actions.busy, "live operations release taps and movement lease")
-        } catch { preconditionFailure("Live native operation failed: " + error.localizedDescription) }
+        } catch { runtimeFailure("Live native operation failed: " + error.localizedDescription) }
     } else { print("Live input validation skipped: this runner did not grant Accessibility access.") }
     controller.openSettings()
     weak var settings = NSApp.windows.first { $0.title == "Litebar settings" }
@@ -121,4 +123,9 @@ private func inspectAccessibility(_ element: AXUIElement, depth: Int, visited: i
     guard AXUIElementCopyMultipleAttributeValues(element, keys, [], &fields) == .success, let fields = fields as? [Any], fields.count == 8 else { return }
     print("AX fixture depth=\(depth) pid=\(pid) identity=\(Array(fields.prefix(7)))")
     for child in (fields[7] as? [AXUIElement] ?? []).prefix(32) { inspectAccessibility(child, depth: depth + 1, visited: &visited) }
+}
+
+private func runtimeFailure(_ message: String) -> Never {
+    fputs("FAIL: " + message + "\n", stderr)
+    exit(1)
 }
