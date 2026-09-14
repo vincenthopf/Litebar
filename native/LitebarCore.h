@@ -34,6 +34,7 @@ uint64_t lb_active_space(void);
 uint32_t lb_fullscreen(void);
 uint32_t lb_window_frame(uint32_t, LBRect *);
 const void *lb_copy_window_descriptions(void);
+const void *lb_copy_window_description(uint32_t);
 int32_t lb_cursor_property(void);
 uint32_t lb_set_cursor_property(uint32_t);
 int32_t lb_process_responsivity(int32_t);

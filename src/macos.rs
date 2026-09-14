@@ -289,27 +289,39 @@ pub extern "C" fn lb_fullscreen() -> u32 {
     })
 }
 
-#[no_mangle]
-pub unsafe extern "C" fn lb_window_frame(id: u32, output: *mut Rect) -> u32 {
-    if output.is_null() || id == 0 {
-        return 0;
-    }
-    if unsafe { pthread_main_np() } == 0 {
-        return 0;
+fn window_description(id: u32) -> Option<Owned> {
+    if id == 0 || unsafe { pthread_main_np() } == 0 {
+        return None;
     }
     let value = id as usize as Ref;
-    let Some(array) = Owned::new(unsafe { CFArrayCreate(ptr::null(), &value, 1, ptr::null()) }) else {
-        return 0;
-    };
-    let Some(descriptions) = Owned::new(unsafe { CGWindowListCreateDescriptionFromArray(array.0) })
-    else {
-        return 0;
-    };
+    let array = Owned::new(unsafe { CFArrayCreate(ptr::null(), &value, 1, ptr::null()) })?;
+    let descriptions = Owned::new(unsafe { CGWindowListCreateDescriptionFromArray(array.0) })?;
     if unsafe {
         CFGetTypeID(descriptions.0) != CFArrayGetTypeID() || CFArrayGetCount(descriptions.0) != 1
     } {
+        return None;
+    }
+    Some(descriptions)
+}
+
+#[no_mangle]
+pub extern "C" fn lb_copy_window_description(id: u32) -> Ref {
+    let Some(descriptions) = window_description(id) else {
+        return ptr::null();
+    };
+    let raw = descriptions.0;
+    std::mem::forget(descriptions);
+    raw
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn lb_window_frame(id: u32, output: *mut Rect) -> u32 {
+    if output.is_null() {
         return 0;
     }
+    let Some(descriptions) = window_description(id) else {
+        return 0;
+    };
     let dictionary = unsafe { CFArrayGetValueAtIndex(descriptions.0, 0) };
     if dictionary.is_null() || unsafe { CFGetTypeID(dictionary) != CFDictionaryGetTypeID() } {
         return 0;
