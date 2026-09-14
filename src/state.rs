@@ -190,6 +190,9 @@ impl State {
             self.buttons = 0;
             self.tracking = 0;
             self.hover_blocked = 0;
+            self.hover_deadline = 0;
+            self.rehide_deadline = 0;
+            self.arm_rehide(config, now);
             return self;
         }
         if self.suspended != 0 {

@@ -1,0 +1,50 @@
+name: Native macOS
+on:
+  push:
+    branches: [rewrite/rust-native, main]
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: native-macos-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-15, macos-15-intel]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+      - name: Install Rust
+        run: rustup toolchain install 1.98.1 --profile minimal --component clippy,rustfmt
+      - name: Test and lint Rust
+        run: |
+          cargo test --all-targets --locked --offline
+          cargo clippy --all-targets --locked --offline -- -D warnings
+      - name: Build native application
+        run: bash scripts/build-macos.sh
+      - name: Validate C ABI and native UI without posting input events
+        run: |
+          app="dist/Litebar-$(uname -m).app"
+          "$app/Contents/MacOS/Litebar" --self-test
+          otool -L "$app/Contents/MacOS/Litebar"
+          du -sk "$app"
+      - name: Package application
+        run: |
+          arch=$(uname -m)
+          ditto -c -k --sequesterRsrc --keepParent "dist/Litebar-$arch.app" "dist/Litebar-$arch.zip"
+          shasum -a 256 "dist/Litebar-$arch.zip" > "dist/Litebar-$arch.sha256"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: Litebar-${{ matrix.os }}
+          path: |
+            dist/*.zip
+            dist/*.sha256
+          if-no-files-found: error
+          retention-days: 14
