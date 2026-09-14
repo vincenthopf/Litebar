@@ -33,8 +33,9 @@ func benchmarkNative(_ controller: Controller) {
                 MainActor.assumeIsolated {
                     let seconds = Double(DispatchTime.now().uptimeNanoseconds - started) / 1_000_000_000
                     let report: [String: Any] = [
-                        "mode": "default settings, isolated preferences, hosted runner permissions",
+                        "mode": "default settings, isolated preferences",
                         "sample_seconds": seconds,
+                        "operating_system": ProcessInfo.processInfo.operatingSystemVersionString,
                         "accessibility_granted": AXIsProcessTrusted(),
                         "screen_capture_granted": CGPreflightScreenCaptureAccess(),
                         "cpu_percent_of_one_core": max(0, cpuSeconds() - cpu) / seconds * 100,
