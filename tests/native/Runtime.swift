@@ -10,13 +10,29 @@ private final class RuntimeTarget: NSObject {
 }
 
 @MainActor
-func validateRuntime(_ controller: Controller) async -> Int {
+func validateRuntime(_ controller: Controller, liveInput: Bool = true) async -> Int {
+    fputs("Permissions: Accessibility=\(AXIsProcessTrusted()) Screen Recording=\(CGPreflightScreenCaptureAccess())\n", stderr)
     var assertions = 0
     var fixtures: [NSStatusItem] = []
+    func removeFixtures() {
+        for item in fixtures {
+            NSStatusBar.system.removeStatusItem(item)
+            if let name = item.autosaveName {
+                UserDefaults.standard.removeObject(forKey: "NSStatusItem Preferred Position " + name)
+                UserDefaults.standard.removeObject(forKey: "NSStatusItem Visible " + name)
+            }
+        }
+        fixtures.removeAll()
+    }
+    func fail(_ message: String) -> Never {
+        fputs("FAIL: " + message + "\n", stderr)
+        removeFixtures()
+        controller.stop()
+        exit(1)
+    }
     func check(_ value: @autoclosure () -> Bool, _ message: String) {
-        let passed = value()
-        fputs("\(passed ? "PASS" : "FAIL"): \(message)\n", stderr)
-        guard passed else { exit(1) }
+        guard value() else { fail(message) }
+        fputs("PASS: \(message)\n", stderr)
         assertions += 1
     }
     func window(_ status: NSStatusItem) -> UInt32 {
@@ -39,13 +55,14 @@ func validateRuntime(_ controller: Controller) async -> Int {
             previous = frames
             try? await Task.sleep(nanoseconds: 50_000_000)
         }
-        runtimeFailure("Native fixture layout did not settle")
+        fail("Native fixture layout did not settle")
     }
     check(controller.state.revealed == 1, "validation begins with native sections shown")
     let target = RuntimeTarget()
     let right = NSStatusBar.system.statusItem(withLength: 24)
     let left = NSStatusBar.system.statusItem(withLength: 24)
     for (item, title) in [(right, "R"), (left, "L")] {
+        item.autosaveName = "Litebar.Validation." + UUID().uuidString
         item.button?.title = title
         item.button?.target = target
         item.button?.action = #selector(RuntimeTarget.clicked)
@@ -53,16 +70,15 @@ func validateRuntime(_ controller: Controller) async -> Int {
         item.button?.setAccessibilityLabel("Litebar runtime " + title)
     }
     fixtures = [left, right]
-    defer {
-        NSStatusBar.system.removeStatusItem(left)
-        NSStatusBar.system.removeStatusItem(right)
-    }
+    defer { removeFixtures() }
     await waitFor { window(left) != 0 && window(right) != 0 }
     check(window(left) != 0 && window(right) != 0, "native runtime fixture windows exist")
     await settle()
     for status in [left, right] {
         let id = window(status)
-        let entries = CGWindowListCopyWindowInfo(.optionIncludingWindow, id) as? [[String: Any]]
+        var raw = UnsafeRawPointer(bitPattern: UInt(id))
+        let ids = withUnsafeMutablePointer(to: &raw) { CFArrayCreate(nil, $0, 1, nil)! }
+        let entries = CGWindowListCreateDescriptionFromArray(ids) as? [[String: Any]]
         let bounds = entries?.first(where: { $0[kCGWindowNumber as String] as? UInt32 == id })?[kCGWindowBounds as String] as? [String: Any]
         let expected = bounds.flatMap { CGRect(dictionaryRepresentation: $0 as CFDictionary) }
         fputs("Window \(id): public=\(String(describing: expected)) Rust=\(String(describing: controller.server.frame(id)))\n", stderr)
@@ -80,23 +96,11 @@ func validateRuntime(_ controller: Controller) async -> Int {
     controller.refreshItems(force: true)
     let owned = [controller.icon?.windowID, controller.hidden?.windowID, controller.always?.windowID].compactMap { $0 }
     check(!controller.displayItems.contains { owned.contains($0.id) }, "own hosted controls are excluded from the item list")
-    if #available(macOS 26, *), AXIsProcessTrusted() {
-        let hosts = [getpid()] + NSRunningApplication.runningApplications(withBundleIdentifier: "com.apple.controlcenter").map(\.processIdentifier)
-        for pid in hosts {
-            let app = AXUIElementCreateApplication(pid)
-            AXUIElementSetMessagingTimeout(app, 0.05)
-            var bar: CFTypeRef?
-            if AXUIElementCopyAttributeValue(app, kAXExtrasMenuBarAttribute as CFString, &bar) == .success, let bar, CFGetTypeID(bar) == AXUIElementGetTypeID() {
-                var visited = 0
-                inspectAccessibility(unsafeBitCast(bar, to: AXUIElement.self), depth: 0, visited: &visited)
-            }
-        }
-    }
     fflush(stdout)
-    if AXIsProcessTrusted() {
+    if liveInput && AXIsProcessTrusted() {
         guard let source = controller.inventory.items.first(where: { $0.id == window(left) }),
               let destination = controller.inventory.items.first(where: { $0.id == window(right) }) else {
-            runtimeFailure("Native movement fixtures are absent from the WindowServer inventory")
+            fail("Native movement fixtures are absent from the WindowServer inventory")
         }
         check(controller.server.matches(source), "live source identity matches")
         check(controller.server.responsive(source.pid), "live source process responds")
@@ -114,39 +118,30 @@ func validateRuntime(_ controller: Controller) async -> Int {
             await waitFor { target.clicks.contains(.rightMouseUp) }
             check(target.clicks.contains(.rightMouseUp), "synthetic right click reaches the status button")
             check(Delivery.activeTaps == 0 && !controller.actions.busy, "live operations release taps and movement lease")
-        } catch { runtimeFailure("Live native operation failed: " + error.localizedDescription) }
-    } else { print("Live input validation skipped: this runner did not grant Accessibility access.") }
-    controller.openSettings()
-    weak var settings = NSApp.windows.first { $0.title == "Litebar settings" }
-    check(settings?.isVisible == true, "controller opens a native settings window")
-    settings?.close()
+        } catch { fail("Live native operation failed: " + error.localizedDescription) }
+    } else if liveInput {
+        fail("Live input validation requires Accessibility access. Use --self-test-ui only for explicitly limited coverage.")
+    } else {
+        print("LIMITED: --self-test-ui does not validate item movement or synthetic clicks.")
+    }
+    weak var settings: NSWindow?
+    autoreleasepool {
+        controller.openSettings()
+        settings = NSApp.windows.first { $0.title == "Litebar settings" }
+        check(settings?.isVisible == true, "controller opens a native settings window")
+        settings?.close()
+    }
     await waitFor { settings == nil }
     check(settings == nil, "closed settings window is released")
-    controller.openSearch()
-    weak var panel = NSApp.windows.first { $0.title == "Litebar items" }
-    check(panel?.isVisible == true, "controller opens a native item panel")
-    controller.closeItems()
+    weak var panel: NSWindow?
+    autoreleasepool {
+        controller.openSearch()
+        panel = NSApp.windows.first { $0.title == "Litebar items" }
+        check(panel?.isVisible == true, "controller opens a native item panel")
+        controller.closeItems()
+    }
     await waitFor { panel == nil }
     check(panel == nil, "closed item panel is released")
     print("Native runtime: \(assertions) assertions passed. Accessibility: \(AXIsProcessTrusted())")
     return assertions
-}
-
-@MainActor
-private func inspectAccessibility(_ element: AXUIElement, depth: Int, visited: inout Int) {
-    guard depth < 4, visited < 32 else { return }
-    visited += 1
-    AXUIElementSetMessagingTimeout(element, 0.05)
-    var pid: pid_t = 0
-    _ = AXUIElementGetPid(element, &pid)
-    let keys = [kAXRoleAttribute, kAXTitleAttribute, kAXDescriptionAttribute, kAXIdentifierAttribute, kAXHelpAttribute, kAXPositionAttribute, kAXSizeAttribute, kAXChildrenAttribute] as CFArray
-    var fields: CFArray?
-    guard AXUIElementCopyMultipleAttributeValues(element, keys, [], &fields) == .success, let fields = fields as? [Any], fields.count == 8 else { return }
-    print("AX fixture depth=\(depth) pid=\(pid) identity=\(Array(fields.prefix(7)))")
-    for child in (fields[7] as? [AXUIElement] ?? []).prefix(32) { inspectAccessibility(child, depth: depth + 1, visited: &visited) }
-}
-
-private func runtimeFailure(_ message: String) -> Never {
-    fputs("FAIL: " + message + "\n", stderr)
-    exit(1)
 }

@@ -40,7 +40,8 @@ final class WindowServer {
     }
 
     func matches(_ item: BarItem) -> Bool {
-        guard let descriptions = CGWindowListCopyWindowInfo(.optionIncludingWindow, item.id) as? [[String: Any]],
+        guard let raw = lb_copy_window_description(item.id),
+              let descriptions = Unmanaged<CFArray>.fromOpaque(raw).takeRetainedValue() as? [[String: Any]],
               let value = descriptions.first(where: { $0[kCGWindowNumber as String] as? UInt32 == item.id }) else { return false }
         return value[kCGWindowOwnerPID as String] as? pid_t == item.pid
             && (value[kCGWindowName as String] as? String ?? "") == item.title

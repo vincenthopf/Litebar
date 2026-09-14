@@ -50,19 +50,10 @@ jobs:
           esac
           xcrun swiftc -swift-version 5 -O -import-objc-header native/LitebarCore.h tests/native/hosting.swift "target/$target/release/liblitebar_core.a" -framework AppKit -framework CoreGraphics -framework CoreFoundation -framework ApplicationServices -liconv -o "$RUNNER_TEMP/hosting-tests"
           "$RUNNER_TEMP/hosting-tests" 2>&1 | tee evidence/hosting-tests.txt
-      - name: Validate native ABI, transport cleanup, and wireframe
-        env:
-          LITEBAR_VALIDATION_DIR: evidence
+      - name: Validate native UI and required live input
+        timeout-minutes: 4
         run: |
-          set -o pipefail
-          app="$RUNNER_TEMP/Litebar-validation.app"
-          if ! "$app/Contents/MacOS/Litebar" --self-test 2>&1 | tee evidence/native-tests.txt; then
-            xcrun lldb --batch -o run -o 'thread backtrace all' -- "$app/Contents/MacOS/Litebar" --self-test > evidence/debugger.txt 2>&1 || true
-            cat evidence/debugger.txt
-            mkdir -p evidence/crashes
-            find "$HOME/Library/Logs/DiagnosticReports" -maxdepth 1 -name 'Litebar*' -type f -exec cp {} evidence/crashes/ \; || true
-            exit 1
-          fi
+          python3 scripts/validate_native.py "$RUNNER_TEMP/Litebar-validation.app" --output evidence/native --timeout 90
           app="dist/Litebar-$(uname -m).app"
           otool -L "$app/Contents/MacOS/Litebar" > evidence/linked-libraries.txt
           du -sk "$app" > evidence/bundle-kib.txt

@@ -2,7 +2,7 @@ import AppKit
 import ApplicationServices
 
 @MainActor
-func validateNative(_ controller: Controller) async {
+func validateNative(_ controller: Controller, liveInput: Bool = true) async {
     var assertions = 0
     func check(_ value: @autoclosure () -> Bool, _ message: String) {
         precondition(value(), message)
@@ -20,6 +20,8 @@ func validateNative(_ controller: Controller) async {
     check(Divider.validWindowID(0) == nil, "null window number")
     check(Divider.validWindowID(Int.max) == nil, "overflowing window number")
     check(Divider.validWindowID(123) == 123, "assigned window number")
+    check(lb_copy_window_description(0) == nil, "null window description")
+    check(lb_copy_window_description(UInt32.max) == nil, "missing window description")
     check(lb_status_item_window_id(nil, -1) == 0, "nil hosted status item")
     check(lb_status_item_window_id(nil, 123) == 123, "legacy status window ID")
     check(identityFlags("com.apple.controlcenter", "BentoBox-0") == 2, "hosted Control Center restriction")
@@ -95,7 +97,7 @@ func validateNative(_ controller: Controller) async {
         }
     } else { preconditionFailure("CGEventSource unavailable") }
     assertions += await validateDelivery()
-    assertions += await validateRuntime(controller)
+    assertions += await validateRuntime(controller, liveInput: liveInput)
     let panel = ItemPanel(controller: controller)
     let item = BarItem(id: 100, pid: 123, namespace: "com.apple.controlcenter", title: "WiFi", name: "Wi-Fi", frame: CGRect(x: 100, y: 0, width: 20, height: 24), onScreen: true, flags: 3, section: 2)
     panel.setItems([item])
