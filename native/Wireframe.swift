@@ -1,5 +1,6 @@
 import AppKit
 import ServiceManagement
+import ScreenCaptureKit
 
 @MainActor
 final class ItemPanel: NSPanel, NSTableViewDataSource, NSTableViewDelegate, NSSearchFieldDelegate {
@@ -41,6 +42,7 @@ final class ItemPanel: NSPanel, NSTableViewDataSource, NSTableViewDelegate, NSSe
         top.orientation = .horizontal
         root.addArrangedSubview(top)
         root.addArrangedSubview(groups)
+        groups.setAccessibilityLabel("Filter menu-bar section")
         for (id, title, width) in [("name", "Item", 360.0), ("section", "Section", 160.0)] {
             let column = NSTableColumn(identifier: NSUserInterfaceItemIdentifier(id))
             column.title = title
@@ -61,6 +63,7 @@ final class ItemPanel: NSPanel, NSTableViewDataSource, NSTableViewDelegate, NSSe
         scroll.borderType = .bezelBorder
         root.addArrangedSubview(scroll)
         destination.addItems(withTitles: ["Visible", "Hidden", "Always-hidden"])
+        destination.setAccessibilityLabel("Move destination section")
         let open = NSButton(title: "Open", target: self, action: #selector(openSelected))
         open.keyEquivalent = "\r"
         let right = NSButton(title: "Right-click", target: self, action: #selector(rightClickSelected))
@@ -191,6 +194,7 @@ final class SettingsWindow: NSWindow {
             field.target = self
             field.action = #selector(change)
             field.widthAnchor.constraint(equalToConstant: 80).isActive = true
+            field.setAccessibilityLabel(title)
             inputs[key] = field
             stack.addArrangedSubview(NSStackView(views: [NSTextField(labelWithString: title), field]))
         }
@@ -213,6 +217,7 @@ final class SettingsWindow: NSWindow {
         let apply = NSButton(title: "Apply spacing", target: self, action: #selector(applySpacing))
         stack.addArrangedSubview(NSStackView(views: [NSTextField(labelWithString: "Spacing offset"), spacing, apply]))
         stack.addArrangedSubview(NSTextField(wrappingLabelWithString: "Spacing is system-wide. Changes take effect when apps next launch or at your next login. Litebar never force-quits other apps."))
+        stack.addArrangedSubview(NSButton(title: "Back up and forget recovery records…", target: controller, action: #selector(Controller.forgetRecovery)))
         stack.addArrangedSubview(permission)
         stack.addArrangedSubview(NSStackView(views: [NSButton(title: "Accessibility permission", target: self, action: #selector(requestAccessibility)),
             NSButton(title: "Window names permission", target: self, action: #selector(requestWindowNames))]))
@@ -255,7 +260,13 @@ final class SettingsWindow: NSWindow {
         _ = AXIsProcessTrustedWithOptions(options)
         refresh()
     }
-    @objc private func requestWindowNames() { _ = CGRequestScreenCaptureAccess(); refresh() }
+    @objc private func requestWindowNames() {
+        if #available(macOS 15, *) { SCShareableContent.getWithCompletionHandler { _, _ in } }
+        else { _ = CGRequestScreenCaptureAccess() }
+        if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture") { NSWorkspace.shared.open(url) }
+        controller?.inventory.invalidate()
+        refresh()
+    }
     @objc private func applySpacing() {
         guard let slider = inputs["Spacing"] as? NSSlider else { return }
         controller?.applySpacing(Int(slider.intValue))
@@ -266,16 +277,17 @@ final class SettingsWindow: NSWindow {
         sender.title = "Press shortcut. Escape cancels."
         controller?.hotkeys.suspend(true)
         recorder = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
-            MainActor.assumeIsolated {
-                guard let self else { return event }
+            let consumed = MainActor.assumeIsolated {
+                guard let self else { return false }
                 self.stopRecording()
                 if event.keyCode != 53 {
                     do { try self.controller?.hotkeys.set(Shortcut(event: event), for: UInt32(sender.tag)) }
                     catch { self.controller?.report(error) }
                 }
                 self.refresh()
-                return nil
+                return true
             }
+            return consumed ? nil : event
         }
     }
     @objc private func clearShortcut(_ sender: NSButton) {
@@ -288,5 +300,6 @@ final class SettingsWindow: NSWindow {
         recordButton = nil
         controller?.hotkeys.suspend(false)
     }
+    override func resignKey() { stopRecording(); refresh(); super.resignKey() }
     override func close() { stopRecording(); super.close() }
 }

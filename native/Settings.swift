@@ -55,9 +55,27 @@ struct Shortcut: Equatable {
     }
     var label: String {
         let prefix = [(1, "⌃"), (2, "⌥"), (4, "⇧"), (8, "⌘")].reduce("") { $0 + (modifiers & UInt32($1.0) != 0 ? $1.1 : "") }
-        let names: [UInt32: String] = [0: "A", 1: "S", 2: "D", 3: "F", 4: "H", 5: "G", 6: "Z", 7: "X", 8: "C", 9: "V", 11: "B", 12: "Q", 13: "W", 14: "E", 15: "R", 16: "Y", 17: "T", 31: "O", 32: "U", 34: "I", 35: "P", 37: "L", 38: "J", 40: "K", 45: "N", 46: "M", 49: "Space", 36: "Return", 123: "←", 124: "→", 125: "↓", 126: "↑"]
-        return prefix + (names[key] ?? "Key \(key)")
+        return prefix + Self.keyLabel(key)
     }
+    private static func keyLabel(_ key: UInt32) -> String {
+        let special: [UInt32: String] = [36: "Return", 48: "Tab", 49: "Space", 51: "Delete", 53: "Escape", 76: "Enter", 115: "Home", 116: "Page Up", 117: "Forward Delete", 119: "End", 121: "Page Down", 123: "←", 124: "→", 125: "↓", 126: "↑"]
+        if let label = special[key] { return label }
+        let functionKeys: [UInt32] = [122, 120, 99, 118, 96, 97, 98, 100, 101, 109, 103, 111, 105, 107, 113, 106, 64, 79, 80, 90]
+        if let index = functionKeys.firstIndex(of: key) { return "F\(index + 1)" }
+        guard key <= 127, let source = TISCopyCurrentASCIICapableKeyboardLayoutInputSource()?.takeRetainedValue(),
+              let raw = TISGetInputSourceProperty(source, kTISPropertyUnicodeKeyLayoutData) else { return "Key \(key)" }
+        let data = Unmanaged<CFData>.fromOpaque(raw).takeUnretainedValue()
+        guard let bytes = CFDataGetBytePtr(data), CFDataGetLength(data) >= MemoryLayout<UCKeyboardLayout>.size else { return "Key \(key)" }
+        let layout = UnsafeRawPointer(bytes).assumingMemoryBound(to: UCKeyboardLayout.self)
+        var deadState: UInt32 = 0
+        var length = 0
+        var characters = [UniChar](repeating: 0, count: 4)
+        let status = UCKeyTranslate(layout, UInt16(key), UInt16(kUCKeyActionDisplay), 0, UInt32(LMGetKbdType()),
+                                    OptionBits(1 << kUCKeyTranslateNoDeadKeysBit), &deadState, characters.count, &length, &characters)
+        guard status == noErr, length > 0, length <= characters.count else { return "Key \(key)" }
+        return String(utf16CodeUnits: characters, count: length).uppercased()
+    }
+
     init(key: UInt32, modifiers: UInt32) { self.key = key; self.modifiers = modifiers & 15 }
     init(event: NSEvent) {
         key = UInt32(event.keyCode)
