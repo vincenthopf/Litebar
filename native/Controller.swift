@@ -31,6 +31,7 @@ final class Controller: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private(set) var hidden: Divider?
     private(set) var always: Divider?
     private var itemPanel: ItemPanel?
+    private var lastError: String?
     private var settingsWindow: SettingsWindow?
     private var eventMonitor: Any?
     private var localMonitor: Any?
@@ -144,7 +145,7 @@ final class Controller: NSObject, NSApplicationDelegate, NSMenuDelegate {
         always?.resize(showingForDrag ? 20 : lb_always_length(state, settings.config), text: "|")
         inventory.invalidate()
         if state.panel != 0 { presentItems(section: state.panel == 2 ? 4 : 2, activate: false) }
-        else { itemPanel?.orderOut(nil) }
+        else if itemPanel?.isVisible == true { releaseItems() }
         if state.revealed == 0 && state.panel == 0 { restoreApplicationMenus() }
         else if state.revealed != 0 { scheduleLayoutCheck() }
     }
@@ -234,8 +235,15 @@ final class Controller: NSObject, NSApplicationDelegate, NSMenuDelegate {
         if let url = URL(string: "https://github.com/vincenthopf/Litebar/releases") { NSWorkspace.shared.open(url) }
     }
     @objc func openSearch() { presentItems(section: 0, activate: true) }
-    func closeItems() { itemPanel?.orderOut(nil); send(.hideAll) }
-    func panelClosed() { if state.panel != 0 { send(.hideAll) } }
+    private func releaseItems() {
+        guard let panel = itemPanel else { return }
+        itemPanel = nil
+        panel.controller = nil
+        panel.close()
+    }
+    func closeItems() { releaseItems(); send(.hideAll) }
+    func panelClosed() { itemPanel = nil; if state.panel != 0 { send(.hideAll) } }
+    func settingsClosed() { settingsWindow = nil }
 
     private var screen: NSScreen? {
         if cachedFullscreen { return NSScreen.screens.first { $0.frame.contains(NSEvent.mouseLocation) } ?? NSScreen.main }
@@ -257,7 +265,8 @@ final class Controller: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     var displayItems: [BarItem] {
-        inventory.items.filter { $0.pid != getpid() }.map { item in
+        let ownWindows = [icon?.windowID, hidden?.windowID, always?.windowID].compactMap { $0 }
+        return inventory.items.filter { $0.pid != getpid() && !ownWindows.contains($0.id) }.map { item in
             var value = item
             if let pending = temporary.first(where: { $0.window == item.id && $0.identity == item.identity }) { value.section = pending.section }
             return value
@@ -267,7 +276,7 @@ final class Controller: NSObject, NSApplicationDelegate, NSMenuDelegate {
     func refreshItems(force: Bool) {
         inventory.refresh(hiddenID: hidden?.windowID, alwaysID: settings.bool("EnableAlwaysHiddenSection") ? always?.windowID : nil, force: force)
         let message = inventory.reliable ? "Double-click to open. Drag rows or choose a section to move. \(temporary.count) temporary item(s)." : "The item inventory is unavailable. Refresh after granting access or switching back to the original desktop. Basic hiding still works."
-        itemPanel?.setItems(displayItems, message: message)
+        itemPanel?.setItems(displayItems, message: lastError ?? message)
     }
 
     private func observe() {
@@ -311,6 +320,7 @@ final class Controller: NSObject, NSApplicationDelegate, NSMenuDelegate {
             self.inventory.invalidate()
             self.installMonitors(force: true)
             self.armTemporaryTimer(3)
+            self.scheduleDividerRepair()
         }
         watch(NotificationCenter.default, NSApplication.didChangeScreenParametersNotification) { [weak self] in
             guard let self else { return }
@@ -322,10 +332,18 @@ final class Controller: NSObject, NSApplicationDelegate, NSMenuDelegate {
             self.send(.hideAll)
             self.inventory.invalidate()
             self.armTemporaryTimer(3)
+            self.scheduleDividerRepair()
         }
         if let window = hidden?.status.button?.window {
             observations.append(window.observe(\.frame, options: [.new]) { [weak self] _, _ in
-                MainActor.assumeIsolated { self?.inventory.invalidate(); self?.menuFrameAt = 0 }
+                MainActor.assumeIsolated {
+                    guard let self else { return }
+                    self.inventory.invalidate()
+                    self.menuFrameAt = 0
+                    if self.cachedFullscreen && self.settings.bool("ShowOnHover") && !self.closing {
+                        self.updatePointer()
+                    }
+                }
             })
         }
     }
@@ -508,7 +526,8 @@ final class Controller: NSObject, NSApplicationDelegate, NSMenuDelegate {
               !NSApp.currentSystemPresentationOptions.contains(.autoHideMenuBar), let screen,
               let menu = Accessibility.applicationMenuFrame(screen: screen) else { return }
         refreshItems(force: true)
-        let visible = inventory.items.filter { $0.pid != getpid() && $0.section != 0 && ($0.section & 1 != 0 || state.revealed & 2 != 0 || $0.section & 2 != 0) }
+        let owned = [icon?.windowID, hidden?.windowID, always?.windowID].compactMap { $0 }
+        let visible = inventory.items.filter { $0.pid != getpid() && !owned.contains($0.id) && $0.section != 0 && ($0.section & 1 != 0 || state.revealed & 2 != 0 || $0.section & 2 != 0) }
         if let first = visible.min(by: { $0.frame.minX < $1.frame.minX }), first.frame.minX <= menu.maxX { hideApplicationMenus() }
     }
 
@@ -537,11 +556,14 @@ final class Controller: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
     }
 
-    private func perform(_ body: @escaping @MainActor () async throws -> Void) {
+    private func perform(interactive: Bool = true, _ body: @escaping @MainActor () async throws -> Void) {
         guard operation == nil, !closing else { report(AppError.message("Another operation is still running.")); return }
+        lastError = nil
         operation = Task { [weak self] in
             defer { self?.operation = nil; self?.refreshItems(force: true) }
-            do { try await body() } catch is CancellationError { } catch { self?.report(error) }
+            do { try await body() }
+            catch is CancellationError { }
+            catch { self?.report(error, interactive: interactive) }
         }
     }
 
@@ -572,7 +594,7 @@ final class Controller: NSObject, NSApplicationDelegate, NSMenuDelegate {
         perform { [self] in
             refreshItems(force: true)
             guard let item = inventory.items.first(where: { $0.id == id }) else { throw AppError.message("The item no longer exists.") }
-            itemPanel?.orderOut(nil)
+            releaseItems()
             defer { armTemporaryTimer() }
             let physicalFrame = server.frame(item.id)
             let visible = item.onScreen && physicalFrame.map { visibleForClick($0) } == true
@@ -703,7 +725,7 @@ final class Controller: NSObject, NSApplicationDelegate, NSMenuDelegate {
     @objc func restoreRequested() { requestRestoration(manual: true) }
     private func requestRestoration(manual: Bool) {
         if actions.busy || operation != nil { armTemporaryTimer(3); return }
-        perform { [self] in try await restoreTemporary(manual: manual) }
+        perform(interactive: manual) { [self] in try await restoreTemporary(manual: manual) }
     }
     private func restoreTemporary(manual: Bool = true) async throws {
         guard !temporary.isEmpty else { return }
@@ -729,7 +751,9 @@ final class Controller: NSObject, NSApplicationDelegate, NSMenuDelegate {
             let item = resolve(context.window, in: matches)
             let anchor = resolve(context.anchor, in: anchors)
             guard let item else {
-                if !matches.isEmpty { context.attempts = 3; remaining.append(context); failed = true }
+                context.attempts = matches.isEmpty ? min(3, context.attempts + 1) : 3
+                remaining.append(context)
+                failed = true
                 continue
             }
             guard let anchor else { context.attempts = 3; remaining.append(context); failed = true; continue }
@@ -759,9 +783,12 @@ final class Controller: NSObject, NSApplicationDelegate, NSMenuDelegate {
         settings.defaults.set(offset, forKey: "ItemSpacingOffset")
     }
 
-    func report(_ error: Error) {
+    func report(_ error: Error, interactive: Bool = true) {
+        lastError = error.localizedDescription
         itemPanel?.status.stringValue = error.localizedDescription
+        icon?.status.button?.toolTip = "Litebar: " + error.localizedDescription
         if validation || benchmark { fputs(error.localizedDescription + "\n", stderr); return }
+        guard interactive else { return }
         let alert = NSAlert(error: error)
         if let window = settingsWindow, window.isVisible { alert.beginSheetModal(for: window) }
         else if let panel = itemPanel, panel.isVisible { alert.beginSheetModal(for: panel) }
@@ -796,6 +823,9 @@ final class Controller: NSObject, NSApplicationDelegate, NSMenuDelegate {
         timer?.invalidate()
         cancelAuxiliaryTimers()
         stopMonitors()
+        releaseItems()
+        settingsWindow?.close()
+        settingsWindow = nil
         hotkeys.stop()
         observations.removeAll()
         for (center, token) in tokens { center.removeObserver(token) }

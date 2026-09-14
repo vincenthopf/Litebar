@@ -1,6 +1,5 @@
 import AppKit
 import ApplicationServices
-import ObjectiveC.runtime
 
 @MainActor
 func validateNative(_ controller: Controller) async {
@@ -14,28 +13,17 @@ func validateNative(_ controller: Controller) async {
         try? await Task.sleep(nanoseconds: 50_000_000)
     }
     if controller.hidden?.windowID == nil {
-        for divider in [controller.icon, controller.hidden, controller.always].compactMap({ $0 }) {
-            print("Status item \(divider.name): \(divider.status), window \(String(describing: divider.status.button?.window)), frame \(String(describing: divider.status.button?.window?.frame))")
-            for object in [divider.status as NSObject, divider.status.button?.window].compactMap({ $0 }) {
-                var cls: AnyClass? = type(of: object)
-                while let current = cls, current != NSObject.self {
-                    var count: UInt32 = 0
-                    if let methods = class_copyMethodList(current, &count) {
-                        let names = (0..<Int(count)).map { NSStringFromSelector(method_getName(methods[$0])) }
-                        print("Class \(NSStringFromClass(current)): \(names.filter { $0.lowercased().contains("window") || $0.lowercased().contains("status") || $0.lowercased().contains("identifier") })")
-                        free(methods)
-                    }
-                    cls = class_getSuperclass(current)
-                }
-            }
-        }
-        print("Menu windows: \(String(describing: controller.server.descriptions()))")
+        print("Missing hosted divider after the startup deadline.")
         fflush(stdout)
     }
     check(Divider.validWindowID(-1) == nil, "unassigned window number")
     check(Divider.validWindowID(0) == nil, "null window number")
     check(Divider.validWindowID(Int.max) == nil, "overflowing window number")
     check(Divider.validWindowID(123) == 123, "assigned window number")
+    check(lb_status_item_window_id(nil, -1) == 0, "nil hosted status item")
+    check(lb_status_item_window_id(nil, 123) == 123, "legacy status window ID")
+    check(identityFlags("com.apple.controlcenter", "BentoBox-0") == 2, "hosted Control Center restriction")
+    check(identityFlags("com.apple.controlcenter", "AudioVideoModule-0") == 1, "hosted privacy indicator restriction")
     check(lb_abi_version() == 1, "ABI version")
     check(MemoryLayout<LBConfig>.size == 24, "config ABI")
     check(MemoryLayout<LBState>.size == 56, "state ABI")
@@ -107,6 +95,7 @@ func validateNative(_ controller: Controller) async {
         }
     } else { preconditionFailure("CGEventSource unavailable") }
     assertions += await validateDelivery()
+    assertions += await validateRuntime(controller)
     let panel = ItemPanel(controller: controller)
     let item = BarItem(id: 100, pid: 123, namespace: "com.apple.controlcenter", title: "WiFi", name: "Wi-Fi", frame: CGRect(x: 100, y: 0, width: 20, height: 24), onScreen: true, flags: 3, section: 2)
     panel.setItems([item])
@@ -138,7 +127,13 @@ private func saveWireframe(_ window: NSWindow, to url: URL) throws {
     guard let view = window.contentView else { throw AppError.message("Missing native content view.") }
     view.layoutSubtreeIfNeeded()
     guard let bitmap = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { throw AppError.message("Unable to render the native wireframe.") }
-    view.cacheDisplay(in: view.bounds, to: bitmap)
+    guard let context = NSGraphicsContext(bitmapImageRep: bitmap) else { throw AppError.message("Unable to create the wireframe graphics context.") }
+    NSGraphicsContext.saveGraphicsState()
+    NSGraphicsContext.current = context
+    NSColor.windowBackgroundColor.setFill()
+    view.bounds.fill()
+    view.displayIgnoringOpacity(view.bounds, in: context)
+    NSGraphicsContext.restoreGraphicsState()
     guard let data = bitmap.representation(using: .png, properties: [:]) else { throw AppError.message("Unable to encode the native wireframe.") }
     try data.write(to: url, options: .atomic)
 }

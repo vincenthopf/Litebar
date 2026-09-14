@@ -9,7 +9,6 @@ type Ref = *const c_void;
 type Connection = unsafe extern "C" fn() -> i32;
 type Count = unsafe extern "C" fn(i32, i32, *mut i32) -> i32;
 type List = unsafe extern "C" fn(i32, i32, i32, *mut u32, *mut i32) -> i32;
-type Frame = unsafe extern "C" fn(i32, u32, *mut Rect) -> i32;
 type ActiveSpace = unsafe extern "C" fn(i32) -> usize;
 type SpaceType = unsafe extern "C" fn(i32, usize) -> u32;
 type Spaces = unsafe extern "C" fn(i32, u32, Ref) -> Ref;
@@ -29,6 +28,8 @@ unsafe extern "C" {
     fn CFArrayGetCount(array: Ref) -> isize;
     fn CFArrayGetValueAtIndex(array: Ref, index: isize) -> Ref;
     fn CFArrayGetTypeID() -> usize;
+    fn CFDictionaryGetTypeID() -> usize;
+    fn CFDictionaryGetValue(dictionary: Ref, key: Ref) -> Ref;
     fn CFNumberCreate(allocator: Ref, kind: i32, value: Ref) -> Ref;
     fn CFNumberGetValue(number: Ref, kind: i32, value: *mut c_void) -> bool;
     fn CFNumberGetTypeID() -> usize;
@@ -45,6 +46,8 @@ unsafe extern "C" {
 #[link(name = "CoreGraphics", kind = "framework")]
 unsafe extern "C" {
     fn CGWindowListCreateDescriptionFromArray(array: Ref) -> Ref;
+    fn CGRectMakeWithDictionaryRepresentation(dictionary: Ref, rect: *mut Rect) -> bool;
+    static kCGWindowBounds: Ref;
 }
 
 #[link(name = "Carbon", kind = "framework")]
@@ -78,7 +81,6 @@ struct Api {
     connection: Option<Connection>,
     count: Option<Count>,
     list: Option<List>,
-    frame: Option<Frame>,
     active: Option<ActiveSpace>,
     kind: Option<SpaceType>,
     spaces: Option<Spaces>,
@@ -122,11 +124,6 @@ impl Api {
                 c"CGSGetProcessMenuBarWindowList",
                 c"SLSGetProcessMenuBarWindowList"
             ),
-            frame: symbol!(
-                Frame,
-                c"CGSGetScreenRectForWindow",
-                c"SLSGetScreenRectForWindow"
-            ),
             active: symbol!(ActiveSpace, c"CGSGetActiveSpace", c"SLSGetActiveSpace"),
             kind: symbol!(SpaceType, c"CGSSpaceGetType", c"SLSSpaceGetType"),
             spaces: symbol!(
@@ -156,7 +153,6 @@ impl Api {
         self.connection.is_some()
             && self.count.is_some()
             && self.list.is_some()
-            && self.frame.is_some()
             && self.active.is_some()
             && self.spaces.is_some()
     }
@@ -298,18 +294,41 @@ pub unsafe extern "C" fn lb_window_frame(id: u32, output: *mut Rect) -> u32 {
     if output.is_null() || id == 0 {
         return 0;
     }
-    with_api(0, |api| {
-        let mut frame = Rect::default();
-        if unsafe { (api.frame?)(api.connection()?, id, &mut frame) } != 0
-            || !frame.valid()
-            || frame.width < 0.0
-            || frame.height < 0.0
-        {
-            return None;
-        }
-        unsafe { output.write(frame) };
-        Some(1)
-    })
+    if unsafe { pthread_main_np() } == 0 {
+        return 0;
+    }
+    let value = id as usize as Ref;
+    let Some(array) = Owned::new(unsafe { CFArrayCreate(ptr::null(), &value, 1, ptr::null()) })
+    else {
+        return 0;
+    };
+    let Some(descriptions) = Owned::new(unsafe { CGWindowListCreateDescriptionFromArray(array.0) })
+    else {
+        return 0;
+    };
+    if unsafe {
+        CFGetTypeID(descriptions.0) != CFArrayGetTypeID() || CFArrayGetCount(descriptions.0) != 1
+    } {
+        return 0;
+    }
+    let dictionary = unsafe { CFArrayGetValueAtIndex(descriptions.0, 0) };
+    if dictionary.is_null() || unsafe { CFGetTypeID(dictionary) != CFDictionaryGetTypeID() } {
+        return 0;
+    }
+    let bounds = unsafe { CFDictionaryGetValue(dictionary, kCGWindowBounds) };
+    if bounds.is_null() || unsafe { CFGetTypeID(bounds) != CFDictionaryGetTypeID() } {
+        return 0;
+    }
+    let mut frame = Rect::default();
+    if !unsafe { CGRectMakeWithDictionaryRepresentation(bounds, &mut frame) }
+        || !frame.valid()
+        || frame.width < 0.0
+        || frame.height < 0.0
+    {
+        return 0;
+    }
+    unsafe { output.write(frame) };
+    1
 }
 
 #[no_mangle]

@@ -39,6 +39,8 @@ jobs:
         run: |
           set -o pipefail
           bash scripts/build-macos.sh 2>&1 | tee evidence/build.txt
+      - name: Build validation-only application
+        run: LITEBAR_VALIDATION=1 LITEBAR_OUTPUT="$RUNNER_TEMP/Litebar-validation.app" bash scripts/build-macos.sh
       - name: Validate native status hosting and real hide/show
         run: |
           set -o pipefail
@@ -53,12 +55,13 @@ jobs:
           LITEBAR_VALIDATION_DIR: evidence
         run: |
           set -o pipefail
-          app="dist/Litebar-$(uname -m).app"
+          app="$RUNNER_TEMP/Litebar-validation.app"
           if ! "$app/Contents/MacOS/Litebar" --self-test 2>&1 | tee evidence/native-tests.txt; then
             xcrun lldb --batch -o run -o 'thread backtrace all' -- "$app/Contents/MacOS/Litebar" --self-test > evidence/debugger.txt 2>&1 || true
             cat evidence/debugger.txt
             exit 1
           fi
+          app="dist/Litebar-$(uname -m).app"
           otool -L "$app/Contents/MacOS/Litebar" > evidence/linked-libraries.txt
           du -sk "$app" > evidence/bundle-kib.txt
       - name: Measure default idle runtime and Rust hot paths

@@ -88,7 +88,8 @@ final class ItemPanel: NSPanel, NSTableViewDataSource, NSTableViewDelegate, NSSe
 
     @objc private func filterChanged() {
         let selectedID = selected?.id
-        let section: UInt32 = groups.selectedSegment == 0 ? 0 : 1 << UInt32(groups.selectedSegment - 1)
+        let index = groups.selectedSegment
+        let section: UInt32 = (1...3).contains(index) ? 1 << UInt32(index - 1) : 0
         let query = search.stringValue
         rows = all.compactMap { item -> (BarItem, Int32)? in
             guard section == 0 || item.section & section != 0 else { return nil }
@@ -119,7 +120,10 @@ final class ItemPanel: NSPanel, NSTableViewDataSource, NSTableViewDelegate, NSSe
     var selected: BarItem? { rows.indices.contains(table.selectedRow) ? rows[table.selectedRow] : nil }
     @objc private func openSelected() { if let selected { controller?.openItem(selected.id, right: false) } }
     @objc private func rightClickSelected() { if let selected { controller?.openItem(selected.id, right: true) } }
-    @objc private func moveSelected() { if let selected { controller?.moveToSection(selected.id, section: 1 << UInt32(destination.indexOfSelectedItem)) } }
+    @objc private func moveSelected() {
+        guard (0...2).contains(destination.indexOfSelectedItem), let selected else { return }
+        controller?.moveToSection(selected.id, section: 1 << UInt32(destination.indexOfSelectedItem))
+    }
     @objc private func refreshItems() { controller?.refreshItems(force: true) }
     override func cancelOperation(_ sender: Any?) { controller?.closeItems() }
     override func close() { super.close(); controller?.panelClosed() }
@@ -145,6 +149,9 @@ final class ItemPanel: NSPanel, NSTableViewDataSource, NSTableViewDelegate, NSSe
 }
 
 @MainActor
+private final class SettingsStack: NSStackView { override var isFlipped: Bool { true } }
+
+@MainActor
 final class SettingsWindow: NSWindow {
     weak var controller: Controller?
     private var inputs: [String: NSControl] = [:]
@@ -160,7 +167,7 @@ final class SettingsWindow: NSWindow {
         minSize = NSSize(width: 560, height: 440)
         let scroll = NSScrollView()
         scroll.hasVerticalScroller = true
-        let stack = NSStackView()
+        let stack = SettingsStack()
         stack.orientation = .vertical
         stack.alignment = .leading
         stack.spacing = 10
@@ -235,7 +242,13 @@ final class SettingsWindow: NSWindow {
             } else if key == "Spacing", let slider = input as? NSSlider { slider.doubleValue = controller.settings.defaults.double(forKey: "ItemSpacingOffset") }
             else if let popup = input as? NSPopUpButton { popup.selectItem(at: max(0, min(popup.numberOfItems - 1, controller.settings.defaults.integer(forKey: key)))) }
             else if let button = input as? NSButton { button.state = controller.settings.bool(key) ? .on : .off }
-            else if let field = input as? NSTextField { field.doubleValue = controller.settings.defaults.double(forKey: key) }
+            else if let field = input as? NSTextField {
+                switch key {
+                case "RehideInterval": field.doubleValue = Double(controller.settings.config.rehide_ms) / 1000
+                case "ShowOnHoverDelay": field.doubleValue = Double(controller.settings.config.hover_ms) / 1000
+                default: field.doubleValue = controller.settings.temporaryInterval
+                }
+            }
         }
         permission.stringValue = "Accessibility: \(AXIsProcessTrusted() ? "granted" : "not granted"). Window names: \(CGPreflightScreenCaptureAccess() ? "granted" : "limited"). Private APIs: \(controller.server.available ? "available" : "unavailable")."
     }
@@ -301,5 +314,5 @@ final class SettingsWindow: NSWindow {
         controller?.hotkeys.suspend(false)
     }
     override func resignKey() { stopRecording(); refresh(); super.resignKey() }
-    override func close() { stopRecording(); super.close() }
+    override func close() { stopRecording(); super.close(); controller?.settingsClosed() }
 }

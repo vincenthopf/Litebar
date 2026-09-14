@@ -214,15 +214,16 @@ enum Accessibility {
         if let pid = NSWorkspace.shared.frontmostApplication?.processIdentifier, lb_process_responsivity(pid) < 0 { return nil }
         var menu: AXUIElement?
         var attributes: CFArray?
-        guard AXUIElementCopyElementAtPosition(system, Float(bounds.minX + 1), Float(bounds.minY + 1), &menu) == .success,
-              let menu,
-              AXUIElementCopyMultipleAttributeValues(menu, [kAXRoleAttribute, kAXChildrenAttribute] as CFArray, .stopOnError, &attributes) == .success,
+        guard AXUIElementCopyElementAtPosition(system, Float(bounds.minX + 1), Float(bounds.minY + 1), &menu) == .success, let menu else { return nil }
+        AXUIElementSetMessagingTimeout(menu, 0.1)
+        guard AXUIElementCopyMultipleAttributeValues(menu, [kAXRoleAttribute, kAXChildrenAttribute] as CFArray, .stopOnError, &attributes) == .success,
               let values = attributes as? [Any], values.count == 2, values[0] as? String == kAXMenuBarRole,
               let children = values[1] as? [AXUIElement], children.count <= 64 else { return nil }
         var result = CGRect.null
         let keys = [kAXEnabledAttribute, kAXPositionAttribute, kAXSizeAttribute] as CFArray
         for child in children {
             guard monotonicMilliseconds() < deadline else { return nil }
+            AXUIElementSetMessagingTimeout(child, 0.05)
             var fields: CFArray?
             let status = AXUIElementCopyMultipleAttributeValues(child, keys, .stopOnError, &fields)
             if status == .cannotComplete { return nil }

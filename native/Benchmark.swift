@@ -1,5 +1,6 @@
 import AppKit
 import Darwin
+import ApplicationServices
 
 private func cpuSeconds() -> Double {
     var usage = rusage()
@@ -23,17 +24,19 @@ private func physicalFootprint() -> UInt64 {
 
 @MainActor
 func benchmarkNative(_ controller: Controller) {
-    let warmup = Timer(timeInterval: 1, repeats: false) { _ in
+    let warmup = Timer(timeInterval: 5, repeats: false) { _ in
         MainActor.assumeIsolated {
             let started = DispatchTime.now().uptimeNanoseconds
             let cpu = cpuSeconds()
             let scans = controller.inventory.scans
-            let sample = Timer(timeInterval: 5, repeats: false) { _ in
+            let sample = Timer(timeInterval: 30, repeats: false) { _ in
                 MainActor.assumeIsolated {
                     let seconds = Double(DispatchTime.now().uptimeNanoseconds - started) / 1_000_000_000
                     let report: [String: Any] = [
                         "mode": "default settings, isolated preferences, hosted runner permissions",
                         "sample_seconds": seconds,
+                        "accessibility_granted": AXIsProcessTrusted(),
+                        "screen_capture_granted": CGPreflightScreenCaptureAccess(),
                         "cpu_percent_of_one_core": max(0, cpuSeconds() - cpu) / seconds * 100,
                         "physical_footprint_bytes": physicalFootprint(),
                         "inventory_scans_during_sample": controller.inventory.scans - scans,

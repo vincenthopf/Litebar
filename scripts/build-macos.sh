@@ -18,9 +18,15 @@ fi
 export MACOSX_DEPLOYMENT_TARGET=14.0
 cargo build --release --lib --locked --offline --target "$target"
 mkdir -p "$out/Contents/MacOS" "$out/Contents/Resources"
-xcrun swiftc -swift-version 5 -O -whole-module-optimization -target "$arch-apple-macosx14.0" \
+sources=(native/Platform.swift native/Settings.swift native/EventDelivery.swift native/Wireframe.swift native/Controller.swift native/Benchmark.swift native/main.swift)
+flags=(-swift-version 5)
+if [ "${LITEBAR_VALIDATION:-0}" = 1 ]; then
+  sources+=(tests/native/Validation.swift tests/native/Runtime.swift)
+  flags+=(-D LITEBAR_VALIDATION)
+fi
+xcrun swiftc "${flags[@]}" -O -whole-module-optimization -target "$arch-apple-macosx14.0" \
   -import-objc-header native/LitebarCore.h \
-  native/Platform.swift native/Settings.swift native/EventDelivery.swift native/Wireframe.swift native/Controller.swift native/Validation.swift native/Benchmark.swift native/main.swift \
+  "${sources[@]}" \
   "target/$target/release/liblitebar_core.a" \
   -framework AppKit -framework ApplicationServices -framework CoreGraphics -framework CoreFoundation -framework Foundation \
   -framework Carbon -framework ScreenCaptureKit -framework ServiceManagement -framework Security -liconv \
