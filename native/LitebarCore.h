@@ -27,4 +27,42 @@ int32_t lb_search_score(const uint8_t *, size_t, const uint8_t *, size_t);
 uint32_t lb_identity_flags(const uint8_t *, size_t, const uint8_t *, size_t);
 LBEventSpec lb_event_spec(uint32_t, uint32_t);
 uint32_t lb_classic_transition(uint32_t, uint32_t, uint32_t);
+
+uint32_t lb_window_server_available(void);
+uint64_t lb_active_space(void);
+uint32_t lb_fullscreen(void);
+uint32_t lb_window_frame(uint32_t, LBRect *);
+const void *lb_copy_window_descriptions(void);
+int32_t lb_cursor_property(void);
+uint32_t lb_set_cursor_property(uint32_t);
+int32_t lb_process_responsivity(int32_t);
+
+typedef struct {
+    uint32_t window_id;
+    int32_t process_id;
+    uint32_t display_id, flags;
+    LBRect frame;
+} LBMoveCandidate;
+typedef struct {
+    uint32_t status, adjacent;
+    double target_x, target_y, fallback_x, fallback_y;
+} LBMovePlan;
+typedef struct {
+    uint64_t deadline, next_observation;
+    uint32_t complete, reserved;
+} LBFrameWait;
+typedef struct {
+    uint32_t active, attempt;
+    uint64_t deadline;
+} LBMoveLease;
+LBMovePlan lb_plan_move(LBMoveCandidate, LBMoveCandidate, uint32_t, uint32_t);
+LBFrameWait lb_frame_wait_start(uint64_t, uint64_t);
+int64_t lb_frame_wait_poll(LBFrameWait *, uint64_t);
+uint32_t lb_move_begin(LBMoveLease *, uint64_t);
+uint32_t lb_move_attempt(LBMoveLease *, uint64_t);
+
+uint32_t lb_interface_showing(uint32_t, uint32_t, int32_t);
+uint32_t lb_restoration_allowed(uint64_t, uint64_t, uint32_t, uint32_t);
+uint32_t lb_resolve_window(uint32_t, const uint32_t *, size_t);
+uint32_t lb_store_journal(const uint8_t *, size_t, const uint8_t *, size_t);
 #endif

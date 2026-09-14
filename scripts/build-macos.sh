@@ -20,10 +20,10 @@ cargo build --release --lib --locked --offline --target "$target"
 mkdir -p "$out/Contents/MacOS" "$out/Contents/Resources"
 xcrun swiftc -swift-version 5 -O -whole-module-optimization -target "$arch-apple-macosx14.0" \
   -import-objc-header native/LitebarCore.h \
-  native/Platform.swift native/Settings.swift native/EventDelivery.swift native/Wireframe.swift native/Controller.swift native/Validation.swift native/main.swift \
+  native/Platform.swift native/Settings.swift native/EventDelivery.swift native/Wireframe.swift native/Controller.swift native/Validation.swift native/Benchmark.swift native/main.swift \
   "target/$target/release/liblitebar_core.a" \
   -framework AppKit -framework ApplicationServices -framework CoreGraphics -framework CoreFoundation -framework Foundation \
-  -framework Carbon -framework ServiceManagement -framework Security -liconv \
+  -framework Carbon -framework ScreenCaptureKit -framework ServiceManagement -framework Security -liconv \
   -Xlinker -dead_strip -o "$out/Contents/MacOS/Litebar"
 cp native/Info.plist "$out/Contents/Info.plist"
 cp LICENSE "$out/Contents/Resources/LICENSE"

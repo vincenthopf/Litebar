@@ -24,69 +24,19 @@ func searchScore(_ query: String, _ text: String) -> Int32 {
 
 @MainActor
 final class WindowServer {
-    typealias Connection = @convention(c) () -> Int32
-    typealias Count = @convention(c) (Int32, Int32, UnsafeMutablePointer<Int32>) -> Int32
-    typealias List = @convention(c) (Int32, Int32, Int32, UnsafeMutablePointer<UInt32>, UnsafeMutablePointer<Int32>) -> Int32
-    typealias Frame = @convention(c) (Int32, UInt32, UnsafeMutablePointer<CGRect>) -> Int32
-    typealias ActiveSpace = @convention(c) (Int32) -> UInt
-    typealias SpaceType = @convention(c) (Int32, UInt) -> UInt32
-    typealias Spaces = @convention(c) (Int32, UInt32, CFArray) -> Unmanaged<CFArray>?
-    typealias SetProperty = @convention(c) (Int32, Int32, CFString, CFTypeRef) -> Int32
-    typealias CopyProperty = @convention(c) (Int32, Int32, CFString, UnsafeMutablePointer<Unmanaged<CFTypeRef>?>) -> Int32
-
-    private let handle = dlopen("/System/Library/PrivateFrameworks/SkyLight.framework/SkyLight", RTLD_LAZY | RTLD_LOCAL)
-    private lazy var connection: Connection? = symbol("CGSMainConnectionID", "SLSMainConnectionID")
-    private lazy var count: Count? = symbol("CGSGetWindowCount", "SLSGetWindowCount")
-    private lazy var list: List? = symbol("CGSGetProcessMenuBarWindowList", "SLSGetProcessMenuBarWindowList")
-    private lazy var getFrame: Frame? = symbol("CGSGetScreenRectForWindow", "SLSGetScreenRectForWindow")
-    private lazy var space: ActiveSpace? = symbol("CGSGetActiveSpace", "SLSGetActiveSpace")
-    private lazy var spaceType: SpaceType? = symbol("CGSSpaceGetType", "SLSSpaceGetType")
-    private lazy var spaces: Spaces? = symbol("CGSCopySpacesForWindows", "SLSCopySpacesForWindows")
-    private lazy var setProperty: SetProperty? = symbol("CGSSetConnectionProperty", "SLSSetConnectionProperty")
-    private lazy var copyProperty: CopyProperty? = symbol("CGSCopyConnectionProperty", "SLSCopyConnectionProperty")
-
-    private func symbol<T>(_ names: String...) -> T? {
-        guard let handle else { return nil }
-        for name in names {
-            if let raw = dlsym(handle, name) { return unsafeBitCast(raw, to: T.self) }
-        }
-        return nil
-    }
-
-    var available: Bool { connection != nil && count != nil && list != nil && getFrame != nil && spaces != nil && space != nil }
-    var activeSpace: UInt? { connection.flatMap { id in space.map { $0(id()) } } }
-    var fullscreen: Bool {
-        guard let connection, let activeSpace, let spaceType else { return false }
-        return spaceType(connection(), activeSpace) == 4
-    }
+    var available: Bool { lb_window_server_available() != 0 }
+    var activeSpace: UInt? { let value = lb_active_space(); return value == 0 ? nil : UInt(value) }
+    var fullscreen: Bool { lb_fullscreen() != 0 }
 
     func frame(_ id: UInt32) -> CGRect? {
-        guard let connection, let getFrame, id != 0 else { return nil }
-        var result = CGRect.zero
-        return getFrame(connection(), id, &result) == 0 && result.finite ? result : nil
+        var value = LBRect()
+        guard lb_window_frame(id, &value) != 0 else { return nil }
+        return CGRect(x: value.x, y: value.y, width: value.width, height: value.height)
     }
 
-    func active(_ id: UInt32, space: UInt) -> Bool {
-        guard let connection, let spaces,
-              let copied = spaces(connection(), 7, [NSNumber(value: id)] as CFArray),
-              let values = copied.takeRetainedValue() as? [NSNumber] else { return false }
-        return values.contains { $0.uintValue == space }
-    }
-
-    func descriptions() -> [[String: Any]] {
-        guard let connection, let count, let list, let activeSpace else { return [] }
-        var capacity: Int32 = 0
-        guard count(connection(), 0, &capacity) == 0, capacity > 0, capacity <= 65536 else { return [] }
-        capacity = min(capacity + 64, 65536)
-        var ids = [UInt32](repeating: 0, count: Int(capacity))
-        var actual: Int32 = 0
-        guard list(connection(), 0, capacity, &ids, &actual) == 0, actual >= 0, actual <= capacity else { return [] }
-        let windows = ids.prefix(Int(actual)).filter { $0 != 0 && active($0, space: activeSpace) }
-        guard !windows.isEmpty else { return [] }
-        var pointers = windows.map { UnsafeRawPointer(bitPattern: UInt($0)) }
-        guard let array = CFArrayCreate(nil, &pointers, pointers.count, nil),
-              let result = CGWindowListCreateDescriptionFromArray(array) as? [[String: Any]] else { return [] }
-        return result
+    func descriptions() -> [[String: Any]]? {
+        guard let value = lb_copy_window_descriptions() else { return nil }
+        return Unmanaged<CFArray>.fromOpaque(value).takeRetainedValue() as? [[String: Any]]
     }
 
     func matches(_ item: BarItem) -> Bool {
@@ -94,20 +44,13 @@ final class WindowServer {
               let value = descriptions.first(where: { $0[kCGWindowNumber as String] as? UInt32 == item.id }) else { return false }
         return value[kCGWindowOwnerPID as String] as? pid_t == item.pid
             && (value[kCGWindowName as String] as? String ?? "") == item.title
+            && (NSRunningApplication(processIdentifier: item.pid)?.bundleIdentifier ?? "<null>") == item.namespace
     }
 
-    func cursorProperty() -> Bool? {
-        guard let connection, let copyProperty else { return nil }
-        var value: Unmanaged<CFTypeRef>?
-        guard copyProperty(connection(), connection(), "SetsCursorInBackground" as CFString, &value) == 0 else { return nil }
-        return value?.takeRetainedValue() as? Bool
-    }
-
+    func responsive(_ pid: pid_t) -> Bool { lb_process_responsivity(pid) >= 0 }
+    func cursorProperty() -> Bool? { let value = lb_cursor_property(); return value < 0 ? nil : value != 0 }
     @discardableResult
-    func setCursorProperty(_ value: Bool) -> Bool {
-        guard let connection, let setProperty else { return false }
-        return setProperty(connection(), connection(), "SetsCursorInBackground" as CFString, value ? kCFBooleanTrue : kCFBooleanFalse) == 0
-    }
+    func setCursorProperty(_ value: Bool) -> Bool { lb_set_cursor_property(value ? 1 : 0) != 0 }
 }
 
 struct BarItem: Identifiable {
@@ -131,10 +74,11 @@ final class Inventory {
     private(set) var scans: UInt64 = 0
     private(set) var refreshedAt: UInt64 = 0
     private(set) var dirty = true
+    private(set) var reliable = false
 
     init(server: WindowServer) { self.server = server }
     func invalidate() { dirty = true }
-    func clear() { items.removeAll(keepingCapacity: false); dirty = true }
+    func clear() { items.removeAll(keepingCapacity: false); dirty = true; reliable = false }
 
     func refresh(hiddenID: UInt32?, alwaysID: UInt32?, force: Bool = false) {
         let now = monotonicMilliseconds()
@@ -142,7 +86,12 @@ final class Inventory {
         scans &+= 1
         refreshedAt = now
         dirty = false
-        let descriptions = server.descriptions()
+        guard let descriptions = server.descriptions() else {
+            reliable = false
+            items.removeAll(keepingCapacity: true)
+            return
+        }
+        reliable = true
         var processes = [pid_t: NSRunningApplication]()
         let hidden = hiddenID.flatMap(server.frame)
         let always = alwaysID.flatMap(server.frame)
@@ -196,13 +145,13 @@ final class Divider {
     private var widthConstraint: NSLayoutConstraint?
     private let defaults: UserDefaults
 
-    init(name: String, position: Int?, defaults: UserDefaults) {
+    init(name: String, position: Int?, defaults: UserDefaults, persistent: Bool = true) {
         self.defaults = defaults
         self.name = name
         let key = "NSStatusItem Preferred Position " + name
         if defaults.object(forKey: key) == nil, let position { defaults.set(position, forKey: key) }
         status = NSStatusBar.system.statusItem(withLength: 0)
-        status.autosaveName = name
+        if persistent { status.autosaveName = name }
         if let button = status.button,
            let constraints = button.window?.contentView?.constraintsAffectingLayout(for: .horizontal) {
             widthConstraint = constraints.first { ($0.secondItem as? NSView) === button.superview }
@@ -253,15 +202,26 @@ enum Accessibility {
         let bounds = CGDisplayBounds(number.uint32Value)
         let system = AXUIElementCreateSystemWide()
         AXUIElementSetMessagingTimeout(system, 0.1)
+        let deadline = monotonicMilliseconds() + 150
+        if let pid = NSWorkspace.shared.frontmostApplication?.processIdentifier, lb_process_responsivity(pid) < 0 { return nil }
         var menu: AXUIElement?
+        var attributes: CFArray?
         guard AXUIElementCopyElementAtPosition(system, Float(bounds.minX + 1), Float(bounds.minY + 1), &menu) == .success,
-              let menu, attribute(menu, kAXRoleAttribute) as? String == kAXMenuBarRole,
-              let children = attribute(menu, kAXChildrenAttribute) as? [AXUIElement] else { return nil }
+              let menu,
+              AXUIElementCopyMultipleAttributeValues(menu, [kAXRoleAttribute, kAXChildrenAttribute] as CFArray, .stopOnError, &attributes) == .success,
+              let values = attributes as? [Any], values.count == 2, values[0] as? String == kAXMenuBarRole,
+              let children = values[1] as? [AXUIElement], children.count <= 64 else { return nil }
         var result = CGRect.null
-        for child in children.prefix(100) {
-            guard attribute(child, kAXEnabledAttribute) as? Bool == true,
-                  let p = attribute(child, kAXPositionAttribute), CFGetTypeID(p) == AXValueGetTypeID(),
-                  let s = attribute(child, kAXSizeAttribute), CFGetTypeID(s) == AXValueGetTypeID() else { continue }
+        let keys = [kAXEnabledAttribute, kAXPositionAttribute, kAXSizeAttribute] as CFArray
+        for child in children {
+            guard monotonicMilliseconds() < deadline else { return nil }
+            var fields: CFArray?
+            let status = AXUIElementCopyMultipleAttributeValues(child, keys, .stopOnError, &fields)
+            if status == .cannotComplete { return nil }
+            guard status == .success, let values = fields as? [Any], values.count == 3, values[0] as? Bool == true else { continue }
+            let p = values[1] as CFTypeRef
+            let s = values[2] as CFTypeRef
+            guard CFGetTypeID(p) == AXValueGetTypeID(), CFGetTypeID(s) == AXValueGetTypeID() else { continue }
             var point = CGPoint.zero
             var size = CGSize.zero
             guard AXValueGetValue(unsafeBitCast(p, to: AXValue.self), .cgPoint, &point),

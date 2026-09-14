@@ -14,7 +14,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-15, macos-15-intel]
+        os: [macos-14, macos-15, macos-26, macos-15-intel]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 20
     steps:
@@ -23,27 +23,47 @@ jobs:
           persist-credentials: false
       - name: Install Rust
         run: rustup toolchain install 1.98.1 --profile minimal --component clippy,rustfmt
+      - name: Record environment
+        run: |
+          mkdir -p evidence
+          sw_vers > evidence/macos.txt
+          xcodebuild -version > evidence/xcode.txt
+          rustc --version > evidence/rust.txt
+          git rev-parse HEAD > evidence/commit.txt
       - name: Test and lint Rust
         run: |
-          cargo test --all-targets --locked --offline
+          set -o pipefail
+          cargo test --all-targets --locked --offline 2>&1 | tee evidence/rust-tests.txt
           cargo clippy --all-targets --locked --offline -- -D warnings
       - name: Build native application
-        run: bash scripts/build-macos.sh
-      - name: Validate C ABI and native UI without posting input events
+        run: |
+          set -o pipefail
+          bash scripts/build-macos.sh 2>&1 | tee evidence/build.txt
+      - name: Validate native ABI, transport cleanup, and wireframe
+        env:
+          LITEBAR_VALIDATION_DIR: evidence
+        run: |
+          set -o pipefail
+          app="dist/Litebar-$(uname -m).app"
+          "$app/Contents/MacOS/Litebar" --self-test 2>&1 | tee evidence/native-tests.txt
+          otool -L "$app/Contents/MacOS/Litebar" > evidence/linked-libraries.txt
+          du -sk "$app" > evidence/bundle-kib.txt
+      - name: Measure default idle runtime and Rust hot paths
         run: |
           app="dist/Litebar-$(uname -m).app"
-          "$app/Contents/MacOS/Litebar" --self-test
-          otool -L "$app/Contents/MacOS/Litebar"
-          du -sk "$app"
+          "$app/Contents/MacOS/Litebar" --benchmark-idle > evidence/idle.json
+          cargo run --release --locked --offline --bin litebar-bench > evidence/core-benchmark.json
       - name: Package application
         run: |
           arch=$(uname -m)
           ditto -c -k --sequesterRsrc --keepParent "dist/Litebar-$arch.app" "dist/Litebar-$arch.zip"
           shasum -a 256 "dist/Litebar-$arch.zip" > "dist/Litebar-$arch.sha256"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
         with:
           name: Litebar-${{ matrix.os }}
           path: |
+            evidence/
             dist/*.zip
             dist/*.sha256
           if-no-files-found: error

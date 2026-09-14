@@ -80,7 +80,7 @@ final class Hotkeys {
     private var handler: EventHandlerRef?
     private var registrations: [UInt32: EventHotKeyRef] = [:]
     private(set) var shortcuts: [UInt32: Shortcut] = [:]
-    private var suspended = false
+    private var suspensionReasons: Set<UInt32> = []
     var action: ((UInt32) -> Void)?
 
     init(defaults: UserDefaults) {
@@ -108,7 +108,7 @@ final class Hotkeys {
             }, 1, &event, Unmanaged.passUnretained(self).toOpaque(), &handler)
             if status != noErr { return ["Unable to install hotkeys (\(status))."] }
         }
-        guard !suspended else { return [] }
+        guard suspensionReasons.isEmpty else { return [] }
         var errors: [String] = []
         for (id, shortcut) in shortcuts where registrations[id] == nil {
             var reference: EventHotKeyRef?
@@ -145,9 +145,9 @@ final class Hotkeys {
         defaults.set(stored, forKey: "Hotkeys")
     }
 
-    func suspend(_ value: Bool) {
-        suspended = value
-        if value { clearRegistrations() } else { _ = install() }
+    func suspend(_ value: Bool, reason: UInt32 = 2) {
+        if value { suspensionReasons.insert(reason) } else { suspensionReasons.remove(reason) }
+        if suspensionReasons.isEmpty { _ = install() } else { clearRegistrations() }
     }
     private func clearRegistrations() {
         for reference in registrations.values { UnregisterEventHotKey(reference) }

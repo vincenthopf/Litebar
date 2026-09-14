@@ -2,7 +2,13 @@ import AppKit
 import ApplicationServices
 
 @MainActor
-final class EventPort {
+protocol EventEndpoint: AnyObject {
+    var receive: ((CGEventType, CGEvent) -> CGEvent?)? { get set }
+    func stop()
+}
+
+@MainActor
+final class EventPort: EventEndpoint {
     private var port: CFMachPort?
     private var source: CFRunLoopSource?
     private let passive: Bool
@@ -53,13 +59,26 @@ final class EventPort {
 
 @MainActor
 final class Delivery {
-    private var first: EventPort?
-    private var second: EventPort?
+    typealias PortFactory = @MainActor (pid_t?, CGEventType, Bool) throws -> any EventEndpoint
+    typealias Post = @MainActor (CGEvent, pid_t?) -> Void
+    private let makePort: PortFactory
+    private let post: Post
+    private let timeout: TimeInterval
+    private var first: (any EventEndpoint)?
+    private var second: (any EventEndpoint)?
     private var timer: Timer?
     private var continuation: CheckedContinuation<Void, Error>?
     private var finished = false
     private static var sequence: Int64 = 0x4c4200000000
     private(set) static var activeTaps = 0
+
+    init(timeout: TimeInterval = 0.05,
+         makePort: @escaping PortFactory = { try EventPort(pid: $0, type: $1, listenOnly: $2) },
+         post: @escaping Post = { event, pid in if let pid { event.postToPid(pid) } else { event.post(tap: .cgSessionEventTap) } }) {
+        self.timeout = min(1, max(0.001, timeout))
+        self.makePort = makePort
+        self.post = post
+    }
 
     static func tag() -> Int64 { sequence &+= 1; return sequence }
 
@@ -80,12 +99,13 @@ final class Delivery {
     }
 
     func send(_ event: CGEvent, through pid: pid_t? = nil) async throws {
+        guard continuation == nil, !finished else { throw AppError.message("Event delivery instances are single-use.") }
         try Task.checkCancellation()
         try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { continuation in
                 self.continuation = continuation
                 do {
-                    let receipt = try EventPort(pid: nil, type: event.type, listenOnly: true)
+                    let receipt = try makePort(nil, event.type, true)
                     second = receipt
                     Self.activeTaps += 1
                     receipt.receive = { [weak self] _, received in
@@ -94,7 +114,7 @@ final class Delivery {
                         guard fields.allSatisfy({ received.getIntegerValueField($0) == event.getIntegerValueField($0) }),
                               let self, !self.finished else { return received }
                         self.second?.stop()
-                        if let pid { event.postToPid(pid) }
+                        if let pid { self.post(event, pid) }
                         self.finish(nil)
                         return received
                     }
@@ -102,20 +122,20 @@ final class Delivery {
                         guard let null = CGEvent(source: nil) else { throw AppError.message("Unable to construct the event relay.") }
                         let token = Self.tag()
                         null.setIntegerValueField(.eventSourceUserData, value: token)
-                        let relay = try EventPort(pid: pid, type: .null, listenOnly: false)
+                        let relay = try makePort(pid, .null, false)
                         first = relay
                         Self.activeTaps += 1
                         relay.receive = { [weak self] _, received in
                             guard received.getIntegerValueField(.eventSourceUserData) == token else { return received }
                             self?.first?.stop()
-                            event.post(tap: .cgSessionEventTap)
+                            self?.post(event, nil)
                             return nil
                         }
                         armTimeout()
-                        null.postToPid(pid)
+                        post(null, pid)
                     } else {
                         armTimeout()
-                        event.post(tap: .cgSessionEventTap)
+                        post(event, nil)
                     }
                 } catch { finish(error) }
             }
@@ -125,7 +145,7 @@ final class Delivery {
     }
 
     private func armTimeout() {
-        let value = Timer(timeInterval: 0.05, repeats: false) { [weak self] _ in
+        let value = Timer(timeInterval: timeout, repeats: false) { [weak self] _ in
             MainActor.assumeIsolated { self?.finish(AppError.message("Menu-bar event delivery timed out.")) }
         }
         timer = value
@@ -173,14 +193,15 @@ final class ItemActions {
     }
 
     private func changed(_ id: UInt32, from initial: CGRect) async throws {
-        let deadline = monotonicMilliseconds() + 100
-        while monotonicMilliseconds() < deadline {
+        var wait = lb_frame_wait_start(monotonicMilliseconds(), 100)
+        while true {
             try Task.checkCancellation()
+            let delay = lb_frame_wait_poll(&wait, monotonicMilliseconds())
+            if delay < 0 { throw AppError.message("The menu-bar item did not move before the deadline.") }
+            if delay > 0 { try await Task.sleep(nanoseconds: UInt64(delay) * 1_000_000); continue }
             guard let current = server.frame(id) else { throw AppError.message("The menu-bar item disappeared.") }
             if current != initial { return }
-            try await Task.sleep(nanoseconds: 10_000_000)
         }
-        throw AppError.message("The menu-bar item did not move before the deadline.")
     }
 
     private func source() throws -> CGEventSource {
@@ -206,6 +227,25 @@ final class ItemActions {
         }
     }
 
+    private func movementPlan(_ item: BarItem, _ target: BarItem, _ frame: CGRect, _ destination: CGRect, _ right: Bool, _ section: UInt32) throws -> LBMovePlan {
+        guard let screen = NSScreen.main,
+              let id = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber else { throw AppError.message("The active display disappeared.") }
+        let activeBounds = CGDisplayBounds(id.uint32Value)
+        for candidate in [frame, destination] where candidate.width < 10000 && !activeBounds.intersects(candidate) {
+            let otherDisplay = NSScreen.screens.contains { other in
+                guard let number = other.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber,
+                      number.uint32Value != id.uint32Value else { return false }
+                return CGDisplayBounds(number.uint32Value).intersects(candidate)
+            }
+            guard !otherDisplay else { throw AppError.message("Select both items on the active display before moving them.") }
+        }
+        let source = LBMoveCandidate(window_id: item.id, process_id: item.pid, display_id: id.uint32Value, flags: item.flags, frame: frame.rust)
+        let target = LBMoveCandidate(window_id: target.id, process_id: target.pid, display_id: id.uint32Value, flags: target.flags, frame: destination.rust)
+        let result = lb_plan_move(source, target, right ? 1 : 0, section)
+        guard result.status == 0 else { throw AppError.message("The item cannot be moved to that section on this display.") }
+        return result
+    }
+
     func move(_ item: BarItem, beside target: BarItem, right: Bool, section: UInt32) async throws {
         guard !busy else { throw AppError.message("Another item operation is still running.") }
         guard item.id != target.id, item.flags & 1 != 0, section == 1 || item.flags & 2 != 0 else {
@@ -216,7 +256,7 @@ final class ItemActions {
         activityChanged?(true)
         defer { busy = false; activityChanged?(false) }
         try await ready()
-        guard server.matches(item) else { throw AppError.message("The item changed owners or identity. Refresh the list and retry.") }
+        guard server.matches(item), server.responsive(item.pid) else { throw AppError.message("The item changed owners or identity. Refresh the list and retry.") }
         guard let cursor = CGEvent(source: nil)?.location else { throw AppError.message("Unable to read the pointer position.") }
         let previousCursorProperty = server.cursorProperty()
         if previousCursorProperty != nil { server.setCursorProperty(true) }
@@ -227,33 +267,37 @@ final class ItemActions {
             if let previousCursorProperty { server.setCursorProperty(previousCursorProperty) }
         }
         let source = try source()
-        let deadline = monotonicMilliseconds() + 2000
+        guard let space = server.activeSpace else { throw AppError.message("The active desktop is unavailable.") }
+        var lease = LBMoveLease()
+        guard lb_move_begin(&lease, monotonicMilliseconds()) != 0 else { throw AppError.message("Unable to begin the move.") }
         var last: Error = AppError.message("The item could not be moved.")
-        for attempt in 0..<5 {
+        while true {
             try Task.checkCancellation()
-            guard monotonicMilliseconds() < deadline else { break }
-            guard server.matches(item), server.matches(target) else { throw AppError.message("An item changed identity during movement.") }
+            let attempt = lb_move_attempt(&lease, monotonicMilliseconds())
+            guard attempt != 0 else { break }
+            guard server.activeSpace == space, server.matches(item), server.matches(target), server.responsive(item.pid) else { throw AppError.message("An item changed identity during movement.") }
             guard let initial = server.frame(item.id), let destination = server.frame(target.id) else { throw AppError.message("A menu-bar item disappeared.") }
-            let adjacent = right ? abs(initial.minX - destination.maxX) < 1 : abs(initial.maxX - destination.minX) < 1
-            if adjacent { return }
-            let fallback = try Delivery.makeEvent(source: source, kind: 0, button: 1, point: CGPoint(x: initial.midX, y: initial.midY), window: item.id, pid: item.pid)
+            let planned = try movementPlan(item, target, initial, destination, right, section)
+            if planned.adjacent != 0 { return }
+            let fallback = try Delivery.makeEvent(source: source, kind: 0, button: 1, point: CGPoint(x: planned.fallback_x, y: planned.fallback_y), window: item.id, pid: item.pid)
             do {
                 let down = try Delivery.makeEvent(source: source, kind: 0, button: 0, point: CGPoint(x: 20000, y: 20000), window: item.id, pid: item.pid)
                 try await Delivery().send(down, through: item.pid)
                 try await changed(item.id, from: initial)
-                guard let lifted = server.frame(item.id), let updatedTarget = server.frame(target.id) else { throw AppError.message("A menu-bar item disappeared during movement.") }
-                let point = CGPoint(x: right ? updatedTarget.maxX : updatedTarget.minX, y: updatedTarget.midY)
+                guard server.activeSpace == space, let lifted = server.frame(item.id), let updatedTarget = server.frame(target.id) else { throw AppError.message("A menu-bar item disappeared during movement.") }
+                let planned = try movementPlan(item, target, initial, updatedTarget, right, section)
+                let point = CGPoint(x: planned.target_x, y: planned.target_y)
                 let up = try Delivery.makeEvent(source: source, kind: 0, button: 1, point: point, window: target.id, pid: item.pid)
                 try await Delivery().send(up, through: item.pid)
                 try await changed(item.id, from: lifted)
                 if let current = server.frame(item.id), let dest = server.frame(target.id),
-                   right ? abs(current.minX - dest.maxX) < 1 : abs(current.maxX - dest.minX) < 1 { return }
+                   try movementPlan(item, target, current, dest, right, section).adjacent != 0 { return }
                 throw AppError.message("macOS moved the item but not to the requested position.")
             } catch {
                 fallback.post(tap: .cgSessionEventTap)
                 last = error
                 if error is CancellationError { throw error }
-                if attempt < 4 { try await wake(item, source: source) }
+                if attempt < 5 { try await wake(item, source: source) }
             }
         }
         throw last
@@ -265,7 +309,7 @@ final class ItemActions {
         activityChanged?(true)
         defer { busy = false; activityChanged?(false) }
         try await ready()
-        guard server.matches(item) else { throw AppError.message("The item changed owners or identity. Refresh the list and retry.") }
+        guard server.matches(item), server.responsive(item.pid) else { throw AppError.message("The item changed owners or identity. Refresh the list and retry.") }
         guard let frame = server.frame(item.id), let cursor = CGEvent(source: nil)?.location,
               NSScreen.screens.contains(where: { screen in
                   guard let id = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber else { return false }
@@ -275,8 +319,14 @@ final class ItemActions {
         let point = CGPoint(x: frame.midX, y: frame.midY)
         let down = try Delivery.makeEvent(source: source, kind: 1, button: right ? 2 : 0, point: point, window: item.id, pid: item.pid)
         let up = try Delivery.makeEvent(source: source, kind: 1, button: right ? 3 : 1, point: point, window: item.id, pid: item.pid)
+        let previousCursorProperty = server.cursorProperty()
+        if previousCursorProperty != nil { server.setCursorProperty(true) }
         let hidden = CGDisplayHideCursor(CGMainDisplayID()) == .success
-        defer { CGWarpMouseCursorPosition(cursor); if hidden { CGDisplayShowCursor(CGMainDisplayID()) } }
+        defer {
+            CGWarpMouseCursorPosition(cursor)
+            if hidden { CGDisplayShowCursor(CGMainDisplayID()) }
+            if let previousCursorProperty { server.setCursorProperty(previousCursorProperty) }
+        }
         do {
             try await Delivery().send(down)
             try await Delivery().send(up)
