@@ -38,6 +38,7 @@ for row in try rows("identities.tsv") {
 }
 require(MenuBarItemInfo.Namespace.null.optional == nil, "null namespace")
 require(MenuBarItemInfo.Namespace("<null>").optional != nil, "literal null namespace is not absent")
+
 @MainActor
 func checkTransitions() throws {
     for row in try rows("transitions.tsv") {
@@ -63,7 +64,7 @@ func checkTransitions() throws {
 }
 try await checkTransitions()
 #if canImport(CoreGraphics)
-let buttonStates: [MenuBarItemEventButtonState] = [.leftMouseDown, .leftMouseUp, .rightMouseDown, .rightMouseUp, .otherMouseDown, .otherMouseUp]
+private let buttonStates: [MenuBarItemEventButtonState] = [.leftMouseDown, .leftMouseUp, .rightMouseDown, .rightMouseUp, .otherMouseDown, .otherMouseUp]
 let source = CGEventSource(stateID: .hidSystemState)!
 let eventItem = MenuBarItem(frame: CGRect(x: 20, y: 0, width: 20, height: 24))
 for row in try rows("events.tsv") {
