@@ -1,7 +1,8 @@
 name: Source validation
 on:
   push:
-    branches: [rewrite/rust-native]
+    branches: [main]
+  pull_request:
   workflow_dispatch:
 permissions:
   contents: read
@@ -16,6 +17,10 @@ jobs:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:
           persist-credentials: false
+      - name: Validate source boundaries
+        run: |
+          python3 scripts/check_source.py
+          python3 -m unittest discover -s tests -p '*_test.py'
       - name: Archive exact tracked source
         run: |
           mkdir -p evidence

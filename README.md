@@ -1,112 +1,45 @@
-<div align="center">
-    <img src="Ice/Assets.xcassets/AppIcon.appiconset/icon_256x256.png" width=200 height=200>
-    <h1>Ice</h1>
-</div>
+# Litebar
 
-Ice is a powerful menu bar management tool. While its primary function is hiding and showing menu bar items, it aims to cover a wide variety of additional features to make it one of the most versatile menu bar tools available.
+A macOS menu-bar manager being rewritten around a dependency-free Rust core and a bare AppKit interface.
 
-![Banner](https://github.com/user-attachments/assets/4423085c-4e4b-4f3d-ad0f-90a217c03470)
+**Work in progress.** [PR #1](https://github.com/vincenthopf/Litebar/pull/1) remains a draft. Native item movement is not passing end-to-end validation. Do not treat build success or the policy tests as proof of feature parity or a production-ready release.
 
-[![Download](https://img.shields.io/badge/download-latest-brightgreen?style=flat-square)](https://github.com/jordanbaird/Ice/releases/latest)
-![Platform](https://img.shields.io/badge/platform-macOS-blue?style=flat-square)
-![Requirements](https://img.shields.io/badge/requirements-macOS%2014%2B-fa4e49?style=flat-square)
-[![Sponsor](https://img.shields.io/badge/Sponsor%20%E2%9D%A4%EF%B8%8F-8A2BE2?style=flat-square)](https://github.com/sponsors/jordanbaird)
-[![Website](https://img.shields.io/badge/Website-015FBA?style=flat-square)](https://icemenubar.app)
-[![License](https://img.shields.io/github/license/jordanbaird/Ice?style=flat-square)](LICENSE)
+## Source layout
 
-> [!NOTE]
-> Ice is currently in active development. Some features have not yet been implemented. Download the latest release [here](https://github.com/jordanbaird/Ice/releases/latest) and see the roadmap below for upcoming features.
+`src/` contains the Rust state machine, geometry, item identity and restrictions, search, movement planning, recovery storage, and private macOS bridges. Cargo has no third-party dependencies.
 
-<a href="https://www.buymeacoffee.com/jordanbaird" target="_blank">
-    <img src="https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png" alt="Buy Me A Coffee" style="height: 60px !important;width: 217px !important;">
-</a>
+`native/` contains seven new Swift files for AppKit windows and controls, settings, event delivery, application lifecycle, and platform integration. This is not a Swift-free implementation, and Swift is not limited to rendering the UI yet.
 
-## Install
+`tests/` contains Rust tests, native macOS tests, and the characterization harness for the original application. Native test code is excluded from the default application build.
 
-### Manual Installation
+The original `Ice/` application, Xcode project, Swift package resolution, appearance assets, media, and SwiftLint pipeline have been removed. [Legacy removal](docs/LEGACY_REMOVAL.md) records the scope and remaining Swift work. No original application source is copied into the replacement build.
 
-Download the "Ice.zip" file from the [latest release](https://github.com/jordanbaird/Ice/releases/latest) and move the unzipped app into your `Applications` folder.
+## Build
 
-### Homebrew
-
-Install Ice using the following command:
+Use macOS 14 or newer with Xcode Command Line Tools and the Rust toolchain pinned in `rust-toolchain.toml`.
 
 ```sh
-brew install --cask jordanbaird-ice
+rustup toolchain install 1.98.1 --profile minimal --component clippy,rustfmt
+bash scripts/build-macos.sh
 ```
 
-## Features/Roadmap
+The build creates `dist/Litebar-arm64.app` or `dist/Litebar-x86_64.app` for the current machine. The Rust build is locked and offline. Apple frameworks are supplied by the macOS SDK. The app is ad-hoc signed, not notarized. A build refuses to overwrite an existing output. Set `LITEBAR_OUTPUT` to a new path for subsequent builds.
 
-### Menu bar item management
+## Validate
 
-- [x] Hide menu bar items
-- [x] "Always-hidden" menu bar section
-- [x] Show hidden menu bar items when hovering over the menu bar
-- [x] Show hidden menu bar items when an empty area in the menu bar is clicked
-- [x] Show hidden menu bar items by scrolling or swiping in the menu bar
-- [x] Automatically rehide menu bar items
-- [x] Hide application menus when they overlap with shown menu bar items
-- [x] Drag and drop interface to arrange individual menu bar items
-- [x] Display hidden menu bar items in a separate bar (e.g. for MacBooks with the notch)
-- [x] Search menu bar items
-- [x] Menu bar item spacing (BETA)
-- [ ] Profiles for menu bar layout
-- [ ] Individual spacer items
-- [ ] Menu bar item groups
-- [ ] Show menu bar items when trigger conditions are met
+```sh
+python3 scripts/check_source.py
+python3 -m unittest discover -s tests -p '*_test.py'
+cargo test --all-targets --locked --offline
+cargo clippy --all-targets --locked --offline -- -D warnings
+```
 
-### Menu bar appearance
+The source guard requires Python 3.11 or newer. It rejects the legacy application and build system, Swift source outside the native adapter and test directories, unapproved native framework imports, and third-party Cargo dependencies.
 
-- [x] Menu bar tint (solid and gradient)
-- [x] Menu bar shadow
-- [x] Menu bar border
-- [x] Custom menu bar shapes (rounded and/or split)
-- [ ] Remove background behind menu bar
-- [ ] Rounded screen corners
-- [ ] Different settings for light/dark mode
+GitHub Actions checks out original commit `11edd39115f3f43a83ae114b5348df6a0e1741cf` separately as `baseline/`. Its source is hash-checked before the characterization harness compiles and runs it. macOS differential tests compare the resulting 80 contract records with the Rust implementation. The baseline workflow also builds the original Release app. The baseline checkout is a test input, not a dependency of the replacement app.
 
-### Hotkeys
-
-- [x] Toggle individual menu bar sections
-- [x] Show the search panel
-- [x] Enable/disable the Ice Bar
-- [x] Show/hide section divider icons
-- [x] Toggle application menus
-- [ ] Enable/disable auto rehide
-- [ ] Temporarily show individual menu bar items
-
-### Other
-
-- [x] Launch at login
-- [x] Automatic updates
-- [ ] Menu bar widgets
-
-## Why does Ice only support macOS 14 and later?
-
-Ice uses a number of system APIs that are available starting in macOS 14. As such, there are no plans to support earlier versions of macOS.
-
-## Gallery
-
-#### Show hidden menu bar items below the menu bar
-
-![Ice Bar](https://github.com/user-attachments/assets/f1429589-6186-4e1b-8aef-592219d49b9b)
-
-#### Drag-and-drop interface to arrange menu bar items
-
-![Menu Bar Layout](https://github.com/user-attachments/assets/095442ba-f2d0-4bb4-9632-91e26ef8d45b)
-
-#### Customize the menu bar's appearance
-
-![Menu Bar Appearance](https://github.com/user-attachments/assets/8c22c185-c3d2-49bb-971e-e1fc17df04b3)
-
-#### Menu bar item search
-
-![Menu Bar Item Search](https://github.com/user-attachments/assets/d1a7df3a-4989-4077-a0b1-8e7d5a1ba5b8)
-
-#### Custom menu bar item spacing
-
-![Menu Bar Item Spacing](https://github.com/user-attachments/assets/b196aa7e-184a-4d4c-b040-502f4aae40a6)
+The native workflow builds and tests on macOS 14, 15, and 26 on Apple Silicon and macOS 15 on Intel. Its live movement failures remain blocking failures. See [compatibility and validation limits](docs/COMPATIBILITY.md).
 
 ## License
 
-Ice is available under the [GPL-3.0 license](LICENSE).
+Derived from Ice by Jordan Baird and contributors. The GPL-3.0 license and original attribution remain in [LICENSE](LICENSE) and [NOTICE](NOTICE). Original source and authorship remain in Git history.

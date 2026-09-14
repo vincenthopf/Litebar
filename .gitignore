@@ -1,3 +1,10 @@
 .DS_Store
-build/
+/target/
+/dist/
+/build/
+/baseline/
+/evidence/
+/.validation/
+__pycache__/
+*.py[cod]
 xcuserdata/
