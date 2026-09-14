@@ -1,7 +1,7 @@
 name: Native macOS
 on:
   push:
-    branches: [rewrite/rust-native, main]
+    branches: [main]
   pull_request:
   workflow_dispatch:
 permissions:
@@ -45,7 +45,11 @@ jobs:
         run: |
           set -o pipefail
           app="dist/Litebar-$(uname -m).app"
-          "$app/Contents/MacOS/Litebar" --self-test 2>&1 | tee evidence/native-tests.txt
+          if ! "$app/Contents/MacOS/Litebar" --self-test 2>&1 | tee evidence/native-tests.txt; then
+            xcrun lldb --batch -o run -o 'thread backtrace all' -- "$app/Contents/MacOS/Litebar" --self-test > evidence/debugger.txt 2>&1 || true
+            cat evidence/debugger.txt
+            exit 1
+          fi
           otool -L "$app/Contents/MacOS/Litebar" > evidence/linked-libraries.txt
           du -sk "$app" > evidence/bundle-kib.txt
       - name: Measure default idle runtime and Rust hot paths
