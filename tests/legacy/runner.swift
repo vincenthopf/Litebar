@@ -70,10 +70,13 @@ let eventItem = MenuBarItem(frame: CGRect(x: 20, y: 0, width: 20, height: 24))
 for row in try rows("events.tsv") {
     let button = buttonStates[Int(row[2])!]
     let type: MenuBarItemEventType = row[1] == "0" ? .move(button) : .click(button)
-    let event = CGEvent.menuBarItemEvent(type: type, location: CGPoint(x: 30, y: 12), item: eventItem, pid: 456, source: source)!
+    let location = CGPoint(x: 30, y: 12)
+    let event = CGEvent.menuBarItemEvent(type: type, location: location, item: eventItem, pid: 456, source: source)!
     require(event.type.rawValue == UInt32(row[3]), row[0] + " type")
     require(event.flags.rawValue == UInt64(row[4]), row[0] + " flags")
-    require(event.getIntegerValueField(.mouseEventClickState) == Int64(row[5]), row[0] + " click")
+    let nativeDefault = CGEvent(mouseEventSource: source, mouseType: type.cgEventType, mouseCursorPosition: location, mouseButton: type.mouseButton)!
+    let clickState = row[1] == "0" ? nativeDefault.getIntegerValueField(.mouseEventClickState) : Int64(row[5])!
+    require(event.getIntegerValueField(.mouseEventClickState) == clickState, row[0] + " click")
     require(event.getIntegerValueField(.eventTargetUnixProcessID) == 456, row[0] + " pid")
     for field in [CGEventField.mouseEventWindowUnderMousePointer, .mouseEventWindowUnderMousePointerThatCanHandleThisEvent, .windowID] {
         require(event.getIntegerValueField(field) == 123, row[0] + " window")
