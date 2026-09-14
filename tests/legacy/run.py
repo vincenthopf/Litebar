@@ -28,6 +28,9 @@ def main():
     generic = predicates[predicates.index("enum Predicates<Input>"):predicates.index("// MARK: - Window Predicates")]
     section = predicates[predicates.index("extension Predicates where Input == MenuBarItem"):predicates.index("// MARK: - Control Item Predicates")]
     support = '''import Foundation
+#if canImport(CoreGraphics)
+import CoreGraphics
+#endif
 struct MenuBarItem { let frame: CGRect }
 enum Constants { static let bundleIdentifier = "com.jordanbaird.Ice" }
 enum ControlItem {
