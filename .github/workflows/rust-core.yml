@@ -1,0 +1,42 @@
+name: Rust core
+on:
+  push:
+    branches: [rewrite/rust-native]
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: rust-core-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-15, macos-15-intel]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+      - name: Install pinned Rust
+        run: rustup toolchain install 1.98.1 --profile minimal --component clippy,rustfmt
+      - name: Compile and test without registry dependencies
+        run: cargo test --all-targets --locked --offline
+      - name: Lint
+        if: always()
+        run: cargo clippy --all-targets --locked --offline -- -D warnings
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        if: runner.os == 'macOS'
+        with:
+          ref: 11edd39115f3f43a83ae114b5348df6a0e1741cf
+          path: baseline
+          persist-credentials: false
+      - name: Compare original Swift and replacement Rust
+        if: runner.os == 'macOS'
+        run: |
+          python3 tests/legacy/run.py baseline .validation
+          cargo run --release --locked --offline --bin litebar-contract > .validation/rust-contract.tsv
+          diff -u .validation/legacy-contract.tsv .validation/rust-contract.tsv
