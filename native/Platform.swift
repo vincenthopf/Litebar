@@ -158,7 +158,12 @@ final class Divider {
         }
     }
 
-    var windowID: UInt32? { status.button?.window.map { UInt32($0.windowNumber) } }
+    static func validWindowID(_ number: Int) -> UInt32? {
+        guard number > 0 else { return nil }
+        return UInt32(exactly: number)
+    }
+
+    var windowID: UInt32? { status.button?.window.flatMap { Self.validWindowID($0.windowNumber) } }
 
     func setVisible(_ visible: Bool) {
         guard status.isVisible != visible else { return }

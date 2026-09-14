@@ -1,5 +1,6 @@
 import AppKit
 import ApplicationServices
+import ObjectiveC.runtime
 
 @MainActor
 func validateNative(_ controller: Controller) async {
@@ -8,6 +9,33 @@ func validateNative(_ controller: Controller) async {
         precondition(value(), message)
         assertions += 1
     }
+    for _ in 0..<40 {
+        if controller.hidden?.windowID != nil { break }
+        try? await Task.sleep(nanoseconds: 50_000_000)
+    }
+    if controller.hidden?.windowID == nil {
+        for divider in [controller.icon, controller.hidden, controller.always].compactMap({ $0 }) {
+            print("Status item \(divider.name): \(divider.status), window \(String(describing: divider.status.button?.window)), frame \(String(describing: divider.status.button?.window?.frame))")
+            for object in [divider.status as NSObject, divider.status.button?.window].compactMap({ $0 }) {
+                var cls: AnyClass? = type(of: object)
+                while let current = cls, current != NSObject.self {
+                    var count: UInt32 = 0
+                    if let methods = class_copyMethodList(current, &count) {
+                        let names = (0..<Int(count)).map { NSStringFromSelector(method_getName(methods[$0])) }
+                        print("Class \(NSStringFromClass(current)): \(names.filter { $0.lowercased().contains("window") || $0.lowercased().contains("status") || $0.lowercased().contains("identifier") })")
+                        free(methods)
+                    }
+                    cls = class_getSuperclass(current)
+                }
+            }
+        }
+        print("Menu windows: \(String(describing: controller.server.descriptions()))")
+        fflush(stdout)
+    }
+    check(Divider.validWindowID(-1) == nil, "unassigned window number")
+    check(Divider.validWindowID(0) == nil, "null window number")
+    check(Divider.validWindowID(Int.max) == nil, "overflowing window number")
+    check(Divider.validWindowID(123) == 123, "assigned window number")
     check(lb_abi_version() == 1, "ABI version")
     check(MemoryLayout<LBConfig>.size == 24, "config ABI")
     check(MemoryLayout<LBState>.size == 56, "state ABI")
