@@ -15,7 +15,7 @@ private final class HostingValidator: NSObject, NSApplicationDelegate {
     var assertions = 0
 
     func check(_ value: @autoclosure () -> Bool, _ message: String) {
-        precondition(value(), message)
+        guard value() else { fputs("FAIL: " + message + "\n", stderr); exit(1) }
         assertions += 1
     }
 
@@ -26,8 +26,21 @@ private final class HostingValidator: NSObject, NSApplicationDelegate {
     func rectangle(_ item: NSStatusItem) -> CGRect? {
         let id = number(item, fallback: Int64(item.button?.window?.windowNumber ?? -1))
         var frame = LBRect()
-        guard id != 0, lb_window_frame(id, &frame) != 0 else { return nil }
+        guard id != 0, lb_window_frame(id, &frame) != 0, frame.width > 0, frame.height > 0 else { return nil }
         return CGRect(x: frame.x, y: frame.y, width: frame.width, height: frame.height)
+    }
+
+    func settle() async {
+        var previous: [CGRect] = []
+        var stable = 0
+        for _ in 0..<60 {
+            let frames = controls.compactMap(rectangle)
+            if frames.count == controls.count && frames == previous { stable += 1 } else { stable = 0 }
+            if stable >= 3 { return }
+            previous = frames
+            try? await Task.sleep(nanoseconds: 50_000_000)
+        }
+        check(false, "Native status layout did not settle")
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -57,28 +70,19 @@ private final class HostingValidator: NSObject, NSApplicationDelegate {
         check(number(HostWrong(), fallback: 123) == 0, "unsupported host ABI fails closed")
         check(number(NSObject(), fallback: 127) == 127, "older OS uses local window ID")
         check(number(NSObject(), fallback: -1) == 0, "unassigned local window ID")
-        for _ in 0..<60 {
-            if controls.allSatisfy({ rectangle($0) != nil }) { break }
-            try? await Task.sleep(nanoseconds: 50_000_000)
-        }
+        await settle()
         for (index, item) in controls.enumerated() {
             print("Assigned status \(index): host=\(number(item)), local=\(item.button?.window?.windowNumber ?? -1), frame=\(String(describing: rectangle(item)))")
         }
         fflush(stdout)
         check(controls.allSatisfy { rectangle($0) != nil }, "every native status item has an assigned server window")
         controls[1].length = 10000
-        for _ in 0..<60 {
-            if let frame = rectangle(controls[2]), frame.maxX <= 0 { break }
-            try? await Task.sleep(nanoseconds: 50_000_000)
-        }
+        await settle()
         print("Hidden fixture: \(String(describing: rectangle(controls[2]))), divider: \(String(describing: rectangle(controls[1])))")
         fflush(stdout)
         check(rectangle(controls[2]).map { $0.maxX <= 0 } == true, "expanded divider actually hides a native status item")
         controls[1].length = 24
-        for _ in 0..<60 {
-            if let frame = rectangle(controls[2]), frame.minX >= 0 { break }
-            try? await Task.sleep(nanoseconds: 50_000_000)
-        }
+        await settle()
         check(rectangle(controls[2]).map { $0.minX >= 0 && $0.width > 0 } == true, "contracted divider restores a native status item")
         for item in controls { NSStatusBar.system.removeStatusItem(item) }
         controls.removeAll()

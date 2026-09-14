@@ -66,7 +66,11 @@ struct Owned(Ref);
 
 impl Owned {
     fn new(value: Ref) -> Option<Self> {
-        (!value.is_null()).then_some(Self(value))
+        if value.is_null() {
+            None
+        } else {
+            Some(Self(value))
+        }
     }
 }
 
@@ -126,11 +130,7 @@ impl Api {
             ),
             active: symbol!(ActiveSpace, c"CGSGetActiveSpace", c"SLSGetActiveSpace"),
             kind: symbol!(SpaceType, c"CGSSpaceGetType", c"SLSSpaceGetType"),
-            spaces: symbol!(
-                Spaces,
-                c"CGSCopySpacesForWindows",
-                c"SLSCopySpacesForWindows"
-            ),
+            spaces: symbol!(Spaces, c"CGSCopySpacesForWindows", c"SLSCopySpacesForWindows"),
             copy: symbol!(
                 CopyProperty,
                 c"CGSCopyConnectionProperty",
@@ -298,8 +298,7 @@ pub unsafe extern "C" fn lb_window_frame(id: u32, output: *mut Rect) -> u32 {
         return 0;
     }
     let value = id as usize as Ref;
-    let Some(array) = Owned::new(unsafe { CFArrayCreate(ptr::null(), &value, 1, ptr::null()) })
-    else {
+    let Some(array) = Owned::new(unsafe { CFArrayCreate(ptr::null(), &value, 1, ptr::null()) }) else {
         return 0;
     };
     let Some(descriptions) = Owned::new(unsafe { CGWindowListCreateDescriptionFromArray(array.0) })
@@ -384,4 +383,14 @@ pub extern "C" fn lb_process_responsivity(pid: i32) -> i32 {
             },
         )
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Owned;
+
+    #[test]
+    fn null_cf_ownership_never_constructs_a_drop_guard() {
+        assert!(Owned::new(std::ptr::null()).is_none());
+    }
 }
