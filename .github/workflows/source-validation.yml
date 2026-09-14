@@ -1,0 +1,34 @@
+name: Source validation
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: source-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  source:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+      - name: Validate source boundaries
+        run: |
+          python3 scripts/check_source.py
+          python3 -m unittest discover -s tests -p '*_test.py'
+      - name: Archive exact tracked source
+        run: |
+          mkdir -p evidence
+          git archive HEAD | gzip > evidence/source.tar.gz
+          git rev-parse HEAD > evidence/commit.txt
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: rewrite-source
+          path: evidence/
+          retention-days: 7
+          if-no-files-found: error

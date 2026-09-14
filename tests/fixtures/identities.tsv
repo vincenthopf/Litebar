@@ -1,0 +1,15 @@
+raw	namespace	title	movable	hideable
+com.apple.controlcenter:Clock	com.apple.controlcenter	Clock	0	1
+com.apple.systemuiserver:Siri	com.apple.systemuiserver	Siri	0	1
+com.apple.controlcenter:BentoBox	com.apple.controlcenter	BentoBox	0	1
+com.apple.controlcenter:AudioVideoModule	com.apple.controlcenter	AudioVideoModule	1	0
+com.apple.controlcenter:FaceTime	com.apple.controlcenter	FaceTime	1	0
+com.apple.controlcenter:MusicRecognition	com.apple.controlcenter	MusicRecognition	1	0
+example.app:One:Two	example.app	One:Two	1	1
+example.app	example.app		1	1
+:Title		Title	1	1
+::		:	1	1
+Special:NewItems	Special	NewItems	1	1
+<null>:Item	<null>	Item	1	1
+应用:菜单:项目	应用	菜单:项目	1	1
+			1	1

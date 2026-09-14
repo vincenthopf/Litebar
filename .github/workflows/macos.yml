@@ -1,0 +1,88 @@
+name: Native macOS
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: native-macos-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-14, macos-15, macos-26, macos-15-intel]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+      - name: Install Rust
+        run: rustup toolchain install 1.98.1 --profile minimal --component clippy,rustfmt
+      - name: Record environment
+        run: |
+          mkdir -p evidence
+          sw_vers > evidence/macos.txt
+          xcodebuild -version > evidence/xcode.txt
+          rustc --version > evidence/rust.txt
+          git rev-parse HEAD > evidence/commit.txt
+      - name: Test and lint Rust
+        run: |
+          set -o pipefail
+          cargo test --all-targets --locked --offline 2>&1 | tee evidence/rust-tests.txt
+          cargo clippy --all-targets --locked --offline -- -D warnings
+      - name: Build native application
+        run: |
+          set -o pipefail
+          bash scripts/build-macos.sh 2>&1 | tee evidence/build.txt
+      - name: Build validation-only application
+        run: LITEBAR_VALIDATION=1 LITEBAR_OUTPUT="$RUNNER_TEMP/Litebar-validation.app" bash scripts/build-macos.sh
+      - name: Validate native status hosting and real hide/show
+        run: |
+          set -o pipefail
+          case "$(uname -m)" in
+            arm64) target=aarch64-apple-darwin ;;
+            x86_64) target=x86_64-apple-darwin ;;
+          esac
+          xcrun swiftc -swift-version 5 -O -import-objc-header native/LitebarCore.h tests/native/hosting.swift "target/$target/release/liblitebar_core.a" -framework AppKit -framework CoreGraphics -framework CoreFoundation -framework ApplicationServices -liconv -o "$RUNNER_TEMP/hosting-tests"
+          "$RUNNER_TEMP/hosting-tests" 2>&1 | tee evidence/hosting-tests.txt
+      - name: Validate native ABI, transport cleanup, and wireframe
+        env:
+          LITEBAR_VALIDATION_DIR: evidence
+        run: |
+          set -o pipefail
+          app="$RUNNER_TEMP/Litebar-validation.app"
+          if ! "$app/Contents/MacOS/Litebar" --self-test 2>&1 | tee evidence/native-tests.txt; then
+            xcrun lldb --batch -o run -o 'thread backtrace all' -- "$app/Contents/MacOS/Litebar" --self-test > evidence/debugger.txt 2>&1 || true
+            cat evidence/debugger.txt
+            mkdir -p evidence/crashes
+            find "$HOME/Library/Logs/DiagnosticReports" -maxdepth 1 -name 'Litebar*' -type f -exec cp {} evidence/crashes/ \; || true
+            exit 1
+          fi
+          app="dist/Litebar-$(uname -m).app"
+          otool -L "$app/Contents/MacOS/Litebar" > evidence/linked-libraries.txt
+          du -sk "$app" > evidence/bundle-kib.txt
+      - name: Measure default idle runtime and Rust hot paths
+        run: |
+          app="dist/Litebar-$(uname -m).app"
+          "$app/Contents/MacOS/Litebar" --benchmark-idle > evidence/idle.json
+          cargo run --release --locked --offline --bin litebar-bench > evidence/core-benchmark.json
+      - name: Package application
+        run: |
+          arch=$(uname -m)
+          ditto -c -k --sequesterRsrc --keepParent "dist/Litebar-$arch.app" "dist/Litebar-$arch.zip"
+          shasum -a 256 "dist/Litebar-$arch.zip" > "dist/Litebar-$arch.sha256"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: Litebar-${{ matrix.os }}
+          path: |
+            evidence/
+            dist/*.zip
+            dist/*.sha256
+          if-no-files-found: error
+          retention-days: 14

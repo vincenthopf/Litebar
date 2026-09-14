@@ -1,0 +1,26 @@
+[package]
+name = "litebar-core"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.85"
+license = "GPL-3.0-only"
+publish = false
+
+[lib]
+name = "litebar_core"
+crate-type = ["rlib", "staticlib"]
+
+[[bin]]
+name = "litebar-contract"
+path = "src/bin/contract.rs"
+
+[[bin]]
+name = "litebar-bench"
+path = "src/bin/bench.rs"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = "debuginfo"
