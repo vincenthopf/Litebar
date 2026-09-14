@@ -204,6 +204,21 @@ final class ItemActions {
         }
     }
 
+    private func settled(_ id: UInt32) async throws -> CGRect {
+        let deadline = monotonicMilliseconds() + 1000
+        var previous: CGRect?
+        var stable = 0
+        while monotonicMilliseconds() < deadline {
+            try Task.checkCancellation()
+            guard let frame = server.frame(id) else { throw AppError.message("The menu-bar item disappeared.") }
+            stable = frame == previous ? stable + 1 : 0
+            if stable >= 4 { return frame }
+            previous = frame
+            try await Task.sleep(nanoseconds: 20_000_000)
+        }
+        throw AppError.message("The menu-bar layout did not settle.")
+    }
+
     private func source() throws -> CGEventSource {
         guard let source = CGEventSource(stateID: .hidSystemState) else { throw AppError.message("Unable to create an event source.") }
         source.localEventsSuppressionInterval = 0
@@ -284,12 +299,15 @@ final class ItemActions {
                 let down = try Delivery.makeEvent(source: source, kind: 0, button: 0, point: CGPoint(x: 20000, y: 20000), window: item.id, pid: item.pid)
                 try await Delivery().send(down, through: item.pid)
                 try await changed(item.id, from: initial)
-                guard server.activeSpace == space, let lifted = server.frame(item.id), let updatedTarget = server.frame(target.id) else { throw AppError.message("A menu-bar item disappeared during movement.") }
+                let updatedTarget = try await settled(target.id)
+                guard server.activeSpace == space, let lifted = server.frame(item.id) else { throw AppError.message("A menu-bar item disappeared during movement.") }
                 let planned = try movementPlan(item, target, initial, updatedTarget, right, section)
-                let point = CGPoint(x: planned.target_x, y: planned.target_y)
+                let point = CGPoint(x: planned.target_x + (right ? -0.5 : 0.5), y: planned.target_y)
                 let up = try Delivery.makeEvent(source: source, kind: 0, button: 1, point: point, window: target.id, pid: item.pid)
                 try await Delivery().send(up, through: item.pid)
                 try await changed(item.id, from: lifted)
+                _ = try await settled(item.id)
+                _ = try await settled(target.id)
                 if let current = server.frame(item.id), let dest = server.frame(target.id),
                    try movementPlan(item, target, current, dest, right, section).adjacent != 0 { return }
                 throw AppError.message("macOS moved the item but not to the requested position.")
