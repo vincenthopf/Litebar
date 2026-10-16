@@ -45,9 +45,7 @@ The runner executes the UI suite and the full-input suite independently, with a 
 
 The source guard requires Python 3.11 or newer. It rejects the legacy application and build system, Swift source outside the native adapter and test directories, unapproved native framework imports, and third-party Cargo dependencies.
 
-GitHub Actions checks out original commit `11edd39115f3f43a83ae114b5348df6a0e1741cf` separately as `baseline/`. Its source is hash-checked before the characterization harness compiles and runs it. macOS differential tests compare the resulting 80 contract records with the Rust implementation. The baseline workflow also builds the original Release app. The baseline checkout is a test input, not a dependency of the replacement app.
-
-The native workflow builds and tests on macOS 14, 15, and 26 on Apple Silicon and macOS 15 on Intel. Its live movement failures remain blocking failures. See [compatibility and validation limits](docs/COMPATIBILITY.md).
+GitHub Actions builds and packages the app on macOS 26 (Apple Silicon) on push to main and on manual dispatch. It does not run tests, lint or UI validation. Run the validation commands above locally. See [compatibility and validation limits](docs/COMPATIBILITY.md).
 
 ## License
 
