@@ -25,8 +25,8 @@ Five Swift test files remain: two characterization harness files and three nativ
 
 ## Safety and validation
 
-The replacement build script uses only `src/`, `native/`, LICENSE, and NOTICE, plus native tests when `LITEBAR_VALIDATION=1`. It does not use any of the deleted directories. The macOS baseline and differential workflows retain their separately pinned original checkout.
+The replacement build script uses only `src/`, `native/`, LICENSE, and NOTICE, plus native tests when `LITEBAR_VALIDATION=1`. It does not use any of the deleted directories. The macOS baseline and differential workflows retained their separately pinned original checkout until they were removed from CI.
 
-The source-validation workflow now checks that deleted legacy paths, old runtime dependencies, and Swift source outside the adapter/test boundaries do not return. Its regression tests cover those rejection rules.
+The source-validation workflow checked that deleted legacy paths, old runtime dependencies, and Swift source outside the adapter/test boundaries did not return. It has since been removed from CI.
 
 This is repository cleanup, not a measured CPU or memory optimization. Native movement failures existed before this commit and are not fixed by removing unused source files. The PR remains a draft.
